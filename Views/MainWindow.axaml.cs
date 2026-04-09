@@ -75,17 +75,18 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnViewerOverlayPressed(object? sender, PointerPressedEventArgs e)
+    private void OnSortButtonPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel)
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            viewModel.CloseViewerCommand.Execute(null);
+            return;
         }
-    }
 
-    private void OnViewerImagePressed(object? sender, PointerPressedEventArgs e)
-    {
-        e.Handled = true;
+        if (sender is Button { ContextMenu: { } contextMenu } button)
+        {
+            contextMenu.Open(button);
+            e.Handled = true;
+        }
     }
 
     private void AttachDeleteConfirmHandler(MainWindowViewModel viewModel)

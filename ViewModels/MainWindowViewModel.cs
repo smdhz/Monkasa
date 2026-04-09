@@ -20,11 +20,10 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private const string LastOpenedDirectoryStateKey = "last_opened_directory";
     private const int ThumbnailWidth = 320;
     private const int ThumbnailHeight = 220;
-    private const int PreviewMaxSize = 1600;
 
     private readonly IFileSystemService _fileSystemService;
     private readonly SqliteThumbnailCacheStore _cacheStore;
-    private readonly IThumbnailService _thumbnailService;
+    private readonly ThumbnailService _thumbnailService;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
@@ -36,10 +35,16 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private int _viewerIndex = -1;
     private string _treeRootPath = string.Empty;
 
+    public enum ImageSortMode
+    {
+        Name,
+        Time
+    }
+
     public MainWindowViewModel(
         IFileSystemService fileSystemService,
         SqliteThumbnailCacheStore cacheStore,
-        IThumbnailService thumbnailService,
+        ThumbnailService thumbnailService,
         ILogger<MainWindowViewModel> logger)
     {
         _fileSystemService = fileSystemService;
@@ -77,8 +82,14 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool isViewerOpen;
 
+    [ObservableProperty]
+    private ImageSortMode currentSortMode = ImageSortMode.Name;
+
     public string SelectedImageName => SelectedImage?.FileName ?? "No image selected";
     public string HeaderRightText => SelectedImage?.FileName ?? StatusText;
+    public string CurrentSortText => CurrentSortMode == ImageSortMode.Time ? "Time" : "Name";
+    public string SortByNameMenuText => CurrentSortMode == ImageSortMode.Name ? "Sort by Name ✔" : "Sort by Name";
+    public string SortByTimeMenuText => CurrentSortMode == ImageSortMode.Time ? "Sort by Time ✔" : "Sort by Time";
 
     public async Task InitializeAsync()
     {
@@ -110,7 +121,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             SelectDirectoryNode(rootNode);
         }
 
-        await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: false);
+        await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: true);
     }
 
     [RelayCommand]
@@ -147,6 +158,23 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         return LoadDirectoryAsync(parent.FullName);
     }
 
+    [RelayCommand]
+    private void SetSortMode(string? mode)
+    {
+        var nextMode = string.Equals(mode, nameof(ImageSortMode.Time), StringComparison.OrdinalIgnoreCase)
+            ? ImageSortMode.Time
+            : ImageSortMode.Name;
+
+        if (CurrentSortMode == nextMode)
+        {
+            return;
+        }
+
+        CurrentSortMode = nextMode;
+        ApplySortToImageItems();
+        StatusText = $"Sorted by {CurrentSortText}";
+    }
+
     partial void OnSelectedDirectoryNodeChanged(DirectoryTreeNodeViewModel? value)
     {
         if (_suppressTreeNavigation || value is null || value.IsPlaceholder)
@@ -181,12 +209,14 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     partial void OnCurrentDirectoryChanged(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return;
-        }
+        // Persist directory state from the navigation flow where failures can be awaited/retried.
+    }
 
-        _ = PersistCurrentDirectoryAsync(value);
+    partial void OnCurrentSortModeChanged(ImageSortMode value)
+    {
+        OnPropertyChanged(nameof(CurrentSortText));
+        OnPropertyChanged(nameof(SortByNameMenuText));
+        OnPropertyChanged(nameof(SortByTimeMenuText));
     }
 
     private async Task LoadDirectoryAsync(string path, bool synchronizeTreeSelection = true)
@@ -207,7 +237,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             await _cacheStore.RemoveMissingThumbnailsInDirectoryAsync(fullPath, cancellationToken);
-            var imageFiles = _fileSystemService.GetImages(fullPath);
+            var imageFiles = SortImageFiles(_fileSystemService.GetImages(fullPath));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -224,6 +254,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
                 StatusText = $"{imageFiles.Count} images";
             });
 
+            await PersistCurrentDirectoryAsync(fullPath);
             await LoadThumbnailsAsync(cancellationToken);
         }
         catch (OperationCanceledException)
@@ -251,29 +282,60 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         var options = new ParallelOptions
         {
             CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount / 2),
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
         };
 
-        await Parallel.ForEachAsync(snapshot, options, async (item, token) =>
+        try
         {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(item.ImageInfo, ThumbnailWidth, ThumbnailHeight, token);
-            if (thumbnail is null)
+            await Parallel.ForEachAsync(snapshot, options, async (item, token) =>
             {
-                return;
-            }
+                Bitmap? thumbnail = null;
 
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!token.IsCancellationRequested)
+                try
                 {
-                    item.SetThumbnail(thumbnail);
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    thumbnail = await _thumbnailService.GetThumbnailAsync(
+                        item.ImageInfo,
+                        ThumbnailWidth,
+                        ThumbnailHeight,
+                        token);
+
+                    if (thumbnail is null)
+                    {
+                        return;
+                    }
+
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (!token.IsCancellationRequested)
+                        {
+                            item.SetThumbnail(thumbnail);
+                        }
+                        else
+                        {
+                            thumbnail.Dispose();
+                        }
+                    }, DispatcherPriority.Background, token);
                 }
-                else
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
-                    thumbnail.Dispose();
+                    thumbnail?.Dispose();
+                }
+                catch
+                {
+                    thumbnail?.Dispose();
+                    throw;
                 }
             });
-        });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Expected when user navigates to another folder while thumbnails are loading.
+        }
     }
 
     [RelayCommand]
@@ -442,7 +504,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             StatusText = $"Loading: {image.FileName}";
-            var preview = await _thumbnailService.GetPreviewAsync(image.FullPath, PreviewMaxSize, cancellationToken);
+            var preview = await _thumbnailService.GetPreviewAsync(image.FullPath, cancellationToken);
 
             if (preview is null || cancellationToken.IsCancellationRequested)
             {
@@ -733,6 +795,68 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         foreach (var image in imageFiles)
         {
             Images.Add(new ImageItemViewModel(image));
+        }
+    }
+
+    private IReadOnlyList<ImageFileInfo> SortImageFiles(IReadOnlyList<ImageFileInfo> imageFiles)
+    {
+        return CurrentSortMode switch
+        {
+            ImageSortMode.Time => imageFiles
+                .OrderByDescending(static x => x.LastWriteUtcTicks)
+                .ThenBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            _ => imageFiles
+                .OrderBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(static x => x.LastWriteUtcTicks)
+                .ToList(),
+        };
+    }
+
+    private void ApplySortToImageItems()
+    {
+        if (Images.Count <= 1)
+        {
+            return;
+        }
+
+        var selectedPath = SelectedImage?.FullPath;
+        var ordered = CurrentSortMode switch
+        {
+            ImageSortMode.Time => Images
+                .OrderByDescending(static x => x.ImageInfo.LastWriteUtcTicks)
+                .ThenBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            _ => Images
+                .OrderBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(static x => x.ImageInfo.LastWriteUtcTicks)
+                .ToList(),
+        };
+
+        var changed = false;
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            if (!ReferenceEquals(Images[index], ordered[index]))
+            {
+                changed = true;
+                break;
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        Images.Clear();
+        foreach (var item in ordered)
+        {
+            Images.Add(item);
+        }
+
+        if (selectedPath is not null)
+        {
+            SelectedImage = Images.FirstOrDefault(x => PathsEqual(x.FullPath, selectedPath));
         }
     }
 

@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Monkasa.ViewModels"
+        xmlns:views="using:Monkasa.Views"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
@@ -27,7 +28,27 @@
                 BorderBrush="#D1D5DB"
                 BorderThickness="0,0,0,1">
             <Grid ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Orientation="Horizontal" Spacing="8" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Width="34"
+                            Height="30"
+                            Padding="0"
+                            HorizontalContentAlignment="Center"
+                            VerticalContentAlignment="Center"
+                            Content="⇵"
+                            ToolTip.Tip="Sort"
+                            PointerPressed="OnSortButtonPointerPressed">
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom">
+                                <MenuItem Header="{Binding SortByNameMenuText}"
+                                          Command="{Binding SetSortModeCommand}"
+                                          CommandParameter="Name" />
+                                <MenuItem Header="{Binding SortByTimeMenuText}"
+                                          Command="{Binding SetSortModeCommand}"
+                                          CommandParameter="Time" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
 
                 <TextBlock Grid.Column="1"
                            Margin="16,0,0,0"
@@ -121,31 +142,8 @@
             </ListBox>
         </Border>
 
-        <Border Grid.RowSpan="2"
-                Grid.ColumnSpan="2"
-                Background="#E6000000"
-                IsVisible="{Binding IsViewerOpen}"
-                PointerPressed="OnViewerOverlayPressed">
-            <Grid Margin="20" RowDefinitions="Auto,*">
-                <Grid ColumnDefinitions="*,Auto">
-                    <TextBlock FontSize="16"
-                               FontWeight="SemiBold"
-                               Foreground="White"
-                               Text="{Binding SelectedImageName}"
-                               TextTrimming="CharacterEllipsis" />
-
-                    <Button Grid.Column="1"
-                            Content="Close"
-                            Command="{Binding CloseViewerCommand}" />
-                </Grid>
-
-                <Image Grid.Row="1"
-                       Margin="0,16"
-                       Source="{Binding ViewerImage}"
-                       Stretch="Uniform"
-                       PointerPressed="OnViewerImagePressed" />
-            </Grid>
-        </Border>
+        <views:ImageViewer Grid.RowSpan="2"
+                           Grid.ColumnSpan="2" />
     </Grid>
 
 </Window>

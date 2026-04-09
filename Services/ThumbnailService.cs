@@ -11,7 +11,7 @@ using SixLabors.ImageSharp.Processing;
 
 namespace Monkasa.Services;
 
-public sealed class ThumbnailService : IThumbnailService
+public sealed class ThumbnailService
 {
     private readonly SqliteThumbnailCacheStore _cacheStore;
     private readonly ILogger<ThumbnailService> _logger;
@@ -79,24 +79,22 @@ public sealed class ThumbnailService : IThumbnailService
 
     public async Task<Bitmap?> GetPreviewAsync(
         string filePath,
-        int maxSize,
         CancellationToken cancellationToken)
     {
-        var safeSize = Math.Max(128, maxSize);
-
-        var generatedBytes = await CreateResizedJpegAsync(
-            filePath,
-            safeSize,
-            safeSize,
-            quality: 86,
-            cancellationToken);
-
-        if (generatedBytes is null)
+        if (!File.Exists(filePath))
         {
             return null;
         }
 
-        return ToBitmap(generatedBytes);
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+            return ToBitmap(bytes);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static async Task<byte[]?> CreateResizedJpegAsync(

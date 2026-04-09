@@ -17,7 +17,6 @@ sealed class Program
     {
         using var host = CreateHostBuilder(args).Build();
         host.Start();
-        _ = host.Services.GetRequiredService<SqliteThumbnailCacheStore>();
 
         try
         {
@@ -43,7 +42,8 @@ sealed class Program
                     options => options.UseSqlite($"Data Source={databasePath}"));
                 services.AddSingleton<IFileSystemService, FileSystemService>();
                 services.AddSingleton<SqliteThumbnailCacheStore>();
-                services.AddSingleton<IThumbnailService, ThumbnailService>();
+                services.AddHostedService<DatabaseInitializationHostedService>();
+                services.AddSingleton<ThumbnailService>();
                 services.AddSingleton<MainWindowViewModel>();
                 services.AddSingleton<MainWindow>();
             });
