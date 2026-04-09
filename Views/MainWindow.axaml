@@ -10,7 +10,7 @@
         MinHeight="700"
         x:Class="Monkasa.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Icon="/Assets/avalonia-logo.ico"
+        Icon="/Resources/monkasa.ico"
         Title="Monkasa">
     <Window.KeyBindings>
         <KeyBinding Gesture="Left" Command="{Binding PreviousImageCommand}" />
