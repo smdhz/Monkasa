@@ -1,42 +1,25 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Monkasa.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Monkasa.Services;
 
 public sealed class SqliteThumbnailCacheStore
 {
-    private readonly string _connectionString;
-    private readonly SemaphoreSlim _dbLock = new(1, 1);
+    private readonly IDbContextFactory<MonkasaDbContext> _dbContextFactory;
     private readonly ILogger<SqliteThumbnailCacheStore> _logger;
 
-    public SqliteThumbnailCacheStore(ILogger<SqliteThumbnailCacheStore> logger)
+    public SqliteThumbnailCacheStore(
+        IDbContextFactory<MonkasaDbContext> dbContextFactory,
+        ILogger<SqliteThumbnailCacheStore> logger)
     {
+        _dbContextFactory = dbContextFactory;
         _logger = logger;
-
-        var appDataDirectory = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(appDataDirectory))
-        {
-            appDataDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".cache");
-        }
-
-        var cacheDirectory = Path.Combine(appDataDirectory, "Monkasa");
-        Directory.CreateDirectory(cacheDirectory);
-
-        var databasePath = Path.Combine(cacheDirectory, "thumbnail-cache.db");
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
-        };
-
-        _connectionString = builder.ToString();
         EnsureSchema();
     }
 
@@ -48,46 +31,31 @@ public sealed class SqliteThumbnailCacheStore
         int height,
         CancellationToken cancellationToken)
     {
-        await _dbLock.WaitAsync(cancellationToken);
         try
         {
-            await using var connection = CreateConnection();
-            await connection.OpenAsync(cancellationToken);
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            var entry = await db.ThumbnailCache
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    x => x.FilePath == filePath && x.Width == width && x.Height == height,
+                    cancellationToken);
 
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT last_write_utc_ticks, file_length, image_bytes
-                FROM thumbnail_cache
-                WHERE file_path = $path AND width = $width AND height = $height;
-                """;
-            command.Parameters.AddWithValue("$path", filePath);
-            command.Parameters.AddWithValue("$width", width);
-            command.Parameters.AddWithValue("$height", height);
-
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
+            if (entry is null)
             {
                 return null;
             }
 
-            var cachedLastWriteUtcTicks = reader.GetInt64(0);
-            var cachedFileLength = reader.GetInt64(1);
-
-            if (cachedLastWriteUtcTicks != lastWriteUtcTicks || cachedFileLength != fileLength)
+            if (entry.LastWriteUtcTicks != lastWriteUtcTicks || entry.FileLength != fileLength)
             {
                 return null;
             }
 
-            return (byte[])reader["image_bytes"];
+            return entry.ImageBytes;
         }
-        catch (SqliteException ex)
+        catch (Exception ex)
         {
             _logger.LogWarning(ex, "Unable to read thumbnail cache entry for {Path}", filePath);
             return null;
-        }
-        finally
-        {
-            _dbLock.Release();
         }
     }
 
@@ -100,83 +68,151 @@ public sealed class SqliteThumbnailCacheStore
         byte[] imageBytes,
         CancellationToken cancellationToken)
     {
-        await _dbLock.WaitAsync(cancellationToken);
         try
         {
-            await using var connection = CreateConnection();
-            await connection.OpenAsync(cancellationToken);
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            var entry = await db.ThumbnailCache.FirstOrDefaultAsync(
+                x => x.FilePath == filePath && x.Width == width && x.Height == height,
+                cancellationToken);
 
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                INSERT INTO thumbnail_cache (
-                    file_path,
-                    last_write_utc_ticks,
-                    file_length,
-                    width,
-                    height,
-                    image_bytes,
-                    updated_utc_ticks)
-                VALUES (
-                    $path,
-                    $lastWriteUtcTicks,
-                    $fileLength,
-                    $width,
-                    $height,
-                    $imageBytes,
-                    $updatedUtcTicks)
-                ON CONFLICT(file_path, width, height) DO UPDATE SET
-                    last_write_utc_ticks = excluded.last_write_utc_ticks,
-                    file_length = excluded.file_length,
-                    image_bytes = excluded.image_bytes,
-                    updated_utc_ticks = excluded.updated_utc_ticks;
-                """;
-            command.Parameters.AddWithValue("$path", filePath);
-            command.Parameters.AddWithValue("$lastWriteUtcTicks", lastWriteUtcTicks);
-            command.Parameters.AddWithValue("$fileLength", fileLength);
-            command.Parameters.AddWithValue("$width", width);
-            command.Parameters.AddWithValue("$height", height);
-            command.Parameters.AddWithValue("$imageBytes", imageBytes);
-            command.Parameters.AddWithValue("$updatedUtcTicks", DateTime.UtcNow.Ticks);
+            if (entry is null)
+            {
+                entry = new ThumbnailCacheEntry
+                {
+                    FilePath = filePath,
+                    Width = width,
+                    Height = height,
+                };
+                db.ThumbnailCache.Add(entry);
+            }
 
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            entry.LastWriteUtcTicks = lastWriteUtcTicks;
+            entry.FileLength = fileLength;
+            entry.ImageBytes = imageBytes;
+            entry.UpdatedUtcTicks = DateTime.UtcNow.Ticks;
+
+            await db.SaveChangesAsync(cancellationToken);
         }
-        catch (SqliteException ex)
+        catch (Exception ex)
         {
             _logger.LogWarning(ex, "Unable to write thumbnail cache entry for {Path}", filePath);
         }
-        finally
+    }
+
+    public async Task<string?> TryGetStateValueAsync(string key, CancellationToken cancellationToken)
+    {
+        try
         {
-            _dbLock.Release();
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            var state = await db.AppState
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.StateKey == key, cancellationToken);
+
+            return state?.StateValue;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to read app state for key {Key}", key);
+            return null;
+        }
+    }
+
+    public async Task SaveStateValueAsync(string key, string value, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            var state = await db.AppState.FirstOrDefaultAsync(x => x.StateKey == key, cancellationToken);
+            if (state is null)
+            {
+                state = new AppStateEntry
+                {
+                    StateKey = key,
+                };
+                db.AppState.Add(state);
+            }
+
+            state.StateValue = value;
+            state.UpdatedUtcTicks = DateTime.UtcNow.Ticks;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to write app state for key {Key}", key);
+        }
+    }
+
+    public async Task RemoveMissingThumbnailsInDirectoryAsync(
+        string directoryPath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var normalizedDirectory = Path.GetFullPath(directoryPath);
+            var directoryPrefix = normalizedDirectory.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedDirectory
+                : normalizedDirectory + Path.DirectorySeparatorChar;
+
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            var candidatePaths = await db.ThumbnailCache
+                .AsNoTracking()
+                .Where(x => x.FilePath.StartsWith(directoryPrefix))
+                .Select(x => x.FilePath)
+                .Distinct()
+                .ToListAsync(cancellationToken);
+
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            var missingFilePaths = candidatePaths
+                .Where(path =>
+                    string.Equals(Path.GetDirectoryName(path), normalizedDirectory, pathComparison)
+                    && !File.Exists(path))
+                .ToArray();
+
+            if (missingFilePaths.Length == 0)
+            {
+                return;
+            }
+
+            var deletedCount = await db.ThumbnailCache
+                .Where(x => missingFilePaths.Contains(x.FilePath))
+                .ExecuteDeleteAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Deleted {Count} thumbnail cache entries for missing files in {Directory}",
+                deletedCount,
+                normalizedDirectory);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to cleanup missing thumbnails for {Directory}", directoryPath);
         }
     }
 
     private void EnsureSchema()
     {
-        using var connection = CreateConnection();
-        connection.Open();
-
-        using var pragmaCommand = connection.CreateCommand();
-        pragmaCommand.CommandText = "PRAGMA journal_mode = WAL;";
-        pragmaCommand.ExecuteNonQuery();
-
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS thumbnail_cache (
-                file_path TEXT NOT NULL,
-                last_write_utc_ticks INTEGER NOT NULL,
-                file_length INTEGER NOT NULL,
-                width INTEGER NOT NULL,
-                height INTEGER NOT NULL,
-                image_bytes BLOB NOT NULL,
-                updated_utc_ticks INTEGER NOT NULL,
-                PRIMARY KEY (file_path, width, height)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_thumbnail_cache_updated
-            ON thumbnail_cache(updated_utc_ticks);
-            """;
-        command.ExecuteNonQuery();
+        using var db = _dbContextFactory.CreateDbContext();
+        db.Database.EnsureCreated();
     }
 
-    private SqliteConnection CreateConnection() => new(_connectionString);
+    public static string GetDatabasePath()
+    {
+        var appDataDirectory = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(appDataDirectory))
+        {
+            appDataDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".cache");
+        }
+
+        var cacheDirectory = Path.Combine(appDataDirectory, "Monkasa");
+        Directory.CreateDirectory(cacheDirectory);
+        return Path.Combine(cacheDirectory, "thumbnail-cache.db");
+    }
 }

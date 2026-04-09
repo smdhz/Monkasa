@@ -1,7 +1,9 @@
 ﻿using System;
 using Avalonia;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Monkasa.Models;
 using Monkasa.Services;
 using Monkasa.ViewModels;
 using Monkasa.Views;
@@ -15,6 +17,7 @@ sealed class Program
     {
         using var host = CreateHostBuilder(args).Build();
         host.Start();
+        _ = host.Services.GetRequiredService<SqliteThumbnailCacheStore>();
 
         try
         {
@@ -29,13 +32,15 @@ sealed class Program
     public static AppBuilder BuildAvaloniaApp(IServiceProvider services)
         => AppBuilder.Configure(() => new App(services))
             .UsePlatformDetect()
-            .WithInterFont()
-            .LogToTrace();
+            .WithInterFont();
 
     private static IHostBuilder CreateHostBuilder(string[] args)
         => Host.CreateDefaultBuilder(args)
             .ConfigureServices(services =>
             {
+                var databasePath = SqliteThumbnailCacheStore.GetDatabasePath();
+                services.AddDbContextFactory<MonkasaDbContext>(
+                    options => options.UseSqlite($"Data Source={databasePath}"));
                 services.AddSingleton<IFileSystemService, FileSystemService>();
                 services.AddSingleton<SqliteThumbnailCacheStore>();
                 services.AddSingleton<IThumbnailService, ThumbnailService>();

@@ -27,10 +27,7 @@
                 BorderBrush="#D1D5DB"
                 BorderThickness="0,0,0,1">
             <Grid ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="Up" Command="{Binding GoParentCommand}" />
-                    <Button Content="Refresh" Command="{Binding RefreshCommand}" />
-                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8" />
 
                 <TextBlock Grid.Column="1"
                            Margin="16,0,0,0"
@@ -55,6 +52,12 @@
                       ItemsSource="{Binding DirectoryTreeRoots}"
                       SelectedItem="{Binding SelectedDirectoryNode, Mode=TwoWay}"
                       PointerPressed="OnDirectoryTreePointerPressed">
+                <TreeView.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Delete Folder"
+                                  Command="{Binding DeleteDirectoryCommand}" />
+                    </ContextMenu>
+                </TreeView.ContextMenu>
                 <TreeView.Styles>
                     <Style Selector="TreeViewItem">
                         <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}" />
@@ -67,13 +70,6 @@
                         <StackPanel IsVisible="{Binding IsVisible}"
                                     Margin="2,3"
                                     Orientation="Horizontal">
-                            <StackPanel.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Delete Folder"
-                                              Command="{ReflectionBinding DataContext.DeleteDirectoryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding .}" />
-                                </ContextMenu>
-                            </StackPanel.ContextMenu>
                             <TextBlock Margin="0,0,6,0" Text="{Binding FolderIcon}" />
                             <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
@@ -86,12 +82,20 @@
                 Grid.Column="1"
                 BorderBrush="#E5E7EB"
                 BorderThickness="0,0,1,0">
-            <ListBox Margin="8"
+            <ListBox Margin="2"
                      BorderThickness="0"
                      ItemsSource="{Binding Images}"
                      SelectedItem="{Binding SelectedImage, Mode=TwoWay}"
                      PointerPressed="OnImageListPointerPressed"
                      DoubleTapped="OnImageListDoubleTapped">
+                <ListBox.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Copy Full Path"
+                                  Command="{Binding CopyImagePathCommand}" />
+                        <MenuItem Header="Delete Image"
+                                  Command="{Binding DeleteImageCommand}" />
+                    </ContextMenu>
+                </ListBox.ContextMenu>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <WrapPanel Orientation="Horizontal" />
@@ -102,23 +106,13 @@
                     <DataTemplate x:DataType="vm:ImageItemViewModel">
                         <Border Width="170"
                                 Height="160"
-                                Margin="6"
+                                Margin="1"
                                 Padding="0"
                                 BorderBrush="#D1D5DB"
                                 BorderThickness="1"
-                                CornerRadius="6"
+                                CornerRadius="3"
                                 ClipToBounds="True"
                                 Background="#F3F4F6">
-                            <Border.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Copy Full Path"
-                                              Command="{ReflectionBinding DataContext.CopyImagePathCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding .}" />
-                                    <MenuItem Header="Delete Image"
-                                              Command="{ReflectionBinding DataContext.DeleteImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding .}" />
-                                </ContextMenu>
-                            </Border.ContextMenu>
                             <Image Source="{Binding Thumbnail}"
                                    Stretch="UniformToFill" />
                         </Border>

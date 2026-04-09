@@ -17,11 +17,13 @@ namespace Monkasa.ViewModels;
 
 public partial class MainWindowViewModel : ObservableObject, IDisposable
 {
+    private const string LastOpenedDirectoryStateKey = "last_opened_directory";
     private const int ThumbnailWidth = 320;
     private const int ThumbnailHeight = 220;
     private const int PreviewMaxSize = 1600;
 
     private readonly IFileSystemService _fileSystemService;
+    private readonly SqliteThumbnailCacheStore _cacheStore;
     private readonly IThumbnailService _thumbnailService;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
@@ -32,13 +34,16 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _initialized;
     private bool _suppressTreeNavigation;
     private int _viewerIndex = -1;
+    private string _treeRootPath = string.Empty;
 
     public MainWindowViewModel(
         IFileSystemService fileSystemService,
+        SqliteThumbnailCacheStore cacheStore,
         IThumbnailService thumbnailService,
         ILogger<MainWindowViewModel> logger)
     {
         _fileSystemService = fileSystemService;
+        _cacheStore = cacheStore;
         _thumbnailService = thumbnailService;
         _logger = logger;
         StatusText = "Ready";
@@ -90,16 +95,22 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             homeDirectory = Directory.GetCurrentDirectory();
         }
 
-        BuildDirectoryTree(homeDirectory);
+        var initialDirectory = await GetInitialDirectoryAsync(homeDirectory);
+        var rootDirectory = IsSameOrChildPath(homeDirectory, initialDirectory)
+            ? homeDirectory
+            : initialDirectory;
+
+        BuildDirectoryTree(rootDirectory);
 
         if (DirectoryTreeRoots.FirstOrDefault() is { } rootNode)
         {
             EnsureNodeChildren(rootNode);
+            PreloadOneMoreFolderLevel(rootNode);
             rootNode.IsExpanded = true;
             SelectDirectoryNode(rootNode);
         }
 
-        await LoadDirectoryAsync(homeDirectory, synchronizeTreeSelection: false);
+        await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: false);
     }
 
     [RelayCommand]
@@ -143,6 +154,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        EnsureNodeChildren(value);
+        PreloadOneMoreFolderLevel(value);
+
         if (PathsEqual(value.FullPath, CurrentDirectory))
         {
             return;
@@ -165,6 +179,16 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _ = LoadViewerImageAsync(value);
     }
 
+    partial void OnCurrentDirectoryChanged(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        _ = PersistCurrentDirectoryAsync(value);
+    }
+
     private async Task LoadDirectoryAsync(string path, bool synchronizeTreeSelection = true)
     {
         if (!Directory.Exists(path))
@@ -182,6 +206,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
+            await _cacheStore.RemoveMissingThumbnailsInDirectoryAsync(fullPath, cancellationToken);
             var imageFiles = _fileSystemService.GetImages(fullPath);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -353,15 +378,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             _fileSystemService.DeleteDirectory(target.FullPath, recursive: true);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                RebuildDirectoryTreeAndTrySelect(nextDirectory);
+            });
 
-            if (PathsEqual(CurrentDirectory, target.FullPath) || IsSameOrChildPath(target.FullPath, CurrentDirectory))
-            {
-                await LoadDirectoryAsync(nextDirectory);
-            }
-            else
-            {
-                await LoadDirectoryAsync(CurrentDirectory);
-            }
+            await LoadDirectoryAsync(nextDirectory, synchronizeTreeSelection: true);
         }
         catch (Exception ex)
         {
@@ -452,8 +474,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private void BuildDirectoryTree(string rootPath)
     {
+        _treeRootPath = NormalizePath(rootPath);
         DirectoryTreeRoots.Clear();
-        var rootNode = CreateDirectoryNode(rootPath, parent: null);
+        var rootNode = CreateDirectoryNode(_treeRootPath, parent: null);
         DirectoryTreeRoots.Add(rootNode);
     }
 
@@ -552,6 +575,51 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _suppressTreeNavigation = false;
     }
 
+    private void RebuildDirectoryTreeAndTrySelect(string preferredPath)
+    {
+        var rootPath = _treeRootPath;
+        if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+        {
+            rootPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+            {
+                rootPath = Directory.GetCurrentDirectory();
+            }
+        }
+
+        BuildDirectoryTree(rootPath);
+
+        if (DirectoryTreeRoots.FirstOrDefault() is { } rootNode)
+        {
+            EnsureNodeChildren(rootNode);
+            PreloadOneMoreFolderLevel(rootNode);
+            rootNode.IsExpanded = true;
+            SelectDirectoryNode(rootNode);
+        }
+
+        if (Directory.Exists(preferredPath))
+        {
+            if (TrySelectNodeByPath(preferredPath) && SelectedDirectoryNode is { } selectedNode)
+            {
+                EnsureNodeChildren(selectedNode);
+                PreloadOneMoreFolderLevel(selectedNode);
+            }
+        }
+    }
+
+    private void PreloadOneMoreFolderLevel(DirectoryTreeNodeViewModel node)
+    {
+        foreach (var child in node.Children)
+        {
+            if (child.IsPlaceholder)
+            {
+                continue;
+            }
+
+            EnsureNodeChildren(child);
+        }
+    }
+
     private bool HasSubdirectories(string path)
     {
         try
@@ -573,6 +641,42 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         return await ConfirmDeleteAsync(title, message);
+    }
+
+    private async Task<string> GetInitialDirectoryAsync(string defaultDirectory)
+    {
+        try
+        {
+            var savedDirectory = await _cacheStore.TryGetStateValueAsync(
+                LastOpenedDirectoryStateKey,
+                CancellationToken.None);
+
+            if (!string.IsNullOrWhiteSpace(savedDirectory) && Directory.Exists(savedDirectory))
+            {
+                return NormalizePath(savedDirectory);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to load last opened directory");
+        }
+
+        return NormalizePath(defaultDirectory);
+    }
+
+    private async Task PersistCurrentDirectoryAsync(string directory)
+    {
+        try
+        {
+            await _cacheStore.SaveStateValueAsync(
+                LastOpenedDirectoryStateKey,
+                NormalizePath(directory),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to persist current directory {Directory}", directory);
+        }
     }
 
     partial void OnStatusTextChanged(string value)
