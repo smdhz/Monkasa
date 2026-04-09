@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.Extensions.Logging;
-using Monkasa.Models;
-
 namespace Monkasa.Services;
 
-public sealed class FileSystemService : IFileSystemService
+public sealed class FileSystemService
 {
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -52,7 +50,7 @@ public sealed class FileSystemService : IFileSystemService
         }
     }
 
-    public IReadOnlyList<ImageFileInfo> GetImages(string path)
+    public IReadOnlyList<FileInfo> GetImages(string path)
     {
         try
         {
@@ -61,11 +59,6 @@ public sealed class FileSystemService : IFileSystemService
                 .Where(static file => SupportedExtensions.Contains(Path.GetExtension(file)))
                 .Select(static file => new FileInfo(file))
                 .OrderBy(static file => file.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(static file => new ImageFileInfo(
-                    file.FullName,
-                    file.Name,
-                    file.Length,
-                    file.LastWriteTimeUtc.Ticks))
                 .ToList();
         }
         catch (Exception ex) when (

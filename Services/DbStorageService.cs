@@ -9,14 +9,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Monkasa.Services;
 
-public sealed class SqliteThumbnailCacheStore
+public sealed class DbStorageService
 {
     private readonly IDbContextFactory<MonkasaDbContext> _dbContextFactory;
-    private readonly ILogger<SqliteThumbnailCacheStore> _logger;
+    private readonly ILogger<DbStorageService> _logger;
 
-    public SqliteThumbnailCacheStore(
+    public DbStorageService(
         IDbContextFactory<MonkasaDbContext> dbContextFactory,
-        ILogger<SqliteThumbnailCacheStore> logger)
+        ILogger<DbStorageService> logger)
     {
         _dbContextFactory = dbContextFactory;
         _logger = logger;
@@ -26,15 +26,6 @@ public sealed class SqliteThumbnailCacheStore
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         await db.Database.EnsureCreatedAsync(cancellationToken);
-        await db.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS app_state (
-                state_key TEXT NOT NULL PRIMARY KEY,
-                state_value TEXT NOT NULL,
-                updated_utc_ticks INTEGER NOT NULL
-            );
-            """,
-            cancellationToken);
     }
 
     public async Task<byte[]?> TryGetAsync(

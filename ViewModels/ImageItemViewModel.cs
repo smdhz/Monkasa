@@ -1,20 +1,20 @@
 using System;
+using System.IO;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Monkasa.Models;
 
 namespace Monkasa.ViewModels;
 
 public sealed partial class ImageItemViewModel : ObservableObject, IDisposable
 {
-    public ImageItemViewModel(ImageFileInfo imageInfo)
+    public ImageItemViewModel(FileInfo imageInfo)
     {
         ImageInfo = imageInfo;
-        FileName = imageInfo.FileName;
-        FullPath = imageInfo.FullPath;
+        FileName = imageInfo.Name;
+        FullPath = imageInfo.FullName;
     }
 
-    public ImageFileInfo ImageInfo { get; }
+    public FileInfo ImageInfo { get; }
 
     public string FileName { get; }
 

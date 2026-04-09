@@ -17,5 +17,5 @@
 - `ViewModels/MainWindowViewModel.cs`：核心状态与交互逻辑（目录、图片、排序、查看器导航）。
 - `Services/FileSystemService.cs`：目录/图片扫描。
 - `Services/ThumbnailService.cs`：缩略图与预览图生成。
-- `Services/SqliteThumbnailCacheStore.cs`：SQLite 缩略图缓存读写。
+- `Services/DbStorageService.cs`：SQLite 缩略图缓存读写。
 - `Views/MainWindow.axaml`：主界面布局与绑定。

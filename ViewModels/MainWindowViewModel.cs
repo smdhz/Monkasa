@@ -10,7 +10,6 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
-using Monkasa.Models;
 using Monkasa.Services;
 
 namespace Monkasa.ViewModels;
@@ -21,8 +20,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private const int ThumbnailWidth = 320;
     private const int ThumbnailHeight = 220;
 
-    private readonly IFileSystemService _fileSystemService;
-    private readonly SqliteThumbnailCacheStore _cacheStore;
+    private readonly FileSystemService _fileSystemService;
+    private readonly DbStorageService _cacheStore;
     private readonly ThumbnailService _thumbnailService;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
@@ -42,8 +41,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public MainWindowViewModel(
-        IFileSystemService fileSystemService,
-        SqliteThumbnailCacheStore cacheStore,
+        FileSystemService fileSystemService,
+        DbStorageService cacheStore,
         ThumbnailService thumbnailService,
         ILogger<MainWindowViewModel> logger)
     {
@@ -783,7 +782,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         return path + Path.DirectorySeparatorChar;
     }
 
-    private void ReplaceImages(IReadOnlyList<ImageFileInfo> imageFiles)
+    private void ReplaceImages(IReadOnlyList<FileInfo> imageFiles)
     {
         foreach (var image in Images)
         {
@@ -798,17 +797,17 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private IReadOnlyList<ImageFileInfo> SortImageFiles(IReadOnlyList<ImageFileInfo> imageFiles)
+    private IReadOnlyList<FileInfo> SortImageFiles(IReadOnlyList<FileInfo> imageFiles)
     {
         return CurrentSortMode switch
         {
             ImageSortMode.Time => imageFiles
-                .OrderByDescending(static x => x.LastWriteUtcTicks)
-                .ThenBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(static x => x.LastWriteTimeUtc.Ticks)
+                .ThenBy(static x => x.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
             _ => imageFiles
-                .OrderBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
-                .ThenByDescending(static x => x.LastWriteUtcTicks)
+                .OrderBy(static x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(static x => x.LastWriteTimeUtc.Ticks)
                 .ToList(),
         };
     }
@@ -824,12 +823,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         var ordered = CurrentSortMode switch
         {
             ImageSortMode.Time => Images
-                .OrderByDescending(static x => x.ImageInfo.LastWriteUtcTicks)
+                .OrderByDescending(static x => x.ImageInfo.LastWriteTimeUtc.Ticks)
                 .ThenBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
             _ => Images
                 .OrderBy(static x => x.FileName, StringComparer.OrdinalIgnoreCase)
-                .ThenByDescending(static x => x.ImageInfo.LastWriteUtcTicks)
+                .ThenByDescending(static x => x.ImageInfo.LastWriteTimeUtc.Ticks)
                 .ToList(),
         };
 

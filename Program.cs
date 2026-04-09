@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using Avalonia;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +17,10 @@ sealed class Program
     public static void Main(string[] args)
     {
         using var host = CreateHostBuilder(args).Build();
+
+        var cacheStore = host.Services.GetRequiredService<DbStorageService>();
+        cacheStore.EnsureSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
+
         host.Start();
 
         try
@@ -37,12 +42,11 @@ sealed class Program
         => Host.CreateDefaultBuilder(args)
             .ConfigureServices(services =>
             {
-                var databasePath = SqliteThumbnailCacheStore.GetDatabasePath();
+                var databasePath = DbStorageService.GetDatabasePath();
                 services.AddDbContextFactory<MonkasaDbContext>(
                     options => options.UseSqlite($"Data Source={databasePath}"));
-                services.AddSingleton<IFileSystemService, FileSystemService>();
-                services.AddSingleton<SqliteThumbnailCacheStore>();
-                services.AddHostedService<DatabaseInitializationHostedService>();
+                services.AddSingleton<FileSystemService>();
+                services.AddSingleton<DbStorageService>();
                 services.AddSingleton<ThumbnailService>();
                 services.AddSingleton<MainWindowViewModel>();
                 services.AddSingleton<MainWindow>();

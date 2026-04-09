@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.Logging;
-using Monkasa.Models;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Processing;
@@ -13,11 +12,11 @@ namespace Monkasa.Services;
 
 public sealed class ThumbnailService
 {
-    private readonly SqliteThumbnailCacheStore _cacheStore;
+    private readonly DbStorageService _cacheStore;
     private readonly ILogger<ThumbnailService> _logger;
 
     public ThumbnailService(
-        SqliteThumbnailCacheStore cacheStore,
+        DbStorageService cacheStore,
         ILogger<ThumbnailService> logger)
     {
         _cacheStore = cacheStore;
@@ -25,7 +24,7 @@ public sealed class ThumbnailService
     }
 
     public async Task<Bitmap?> GetThumbnailAsync(
-        ImageFileInfo imageInfo,
+        FileInfo imageInfo,
         int width,
         int height,
         CancellationToken cancellationToken)
@@ -34,9 +33,9 @@ public sealed class ThumbnailService
         var safeHeight = Math.Max(32, height);
 
         var cachedBytes = await _cacheStore.TryGetAsync(
-            imageInfo.FullPath,
-            imageInfo.LastWriteUtcTicks,
-            imageInfo.FileLength,
+            imageInfo.FullName,
+            imageInfo.LastWriteTimeUtc.Ticks,
+            imageInfo.Length,
             safeWidth,
             safeHeight,
             cancellationToken);
@@ -49,12 +48,12 @@ public sealed class ThumbnailService
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Ignoring broken cached thumbnail for {Path}", imageInfo.FullPath);
+                _logger.LogDebug(ex, "Ignoring broken cached thumbnail for {Path}", imageInfo.FullName);
             }
         }
 
         var generatedBytes = await CreateResizedJpegAsync(
-            imageInfo.FullPath,
+            imageInfo.FullName,
             safeWidth,
             safeHeight,
             quality: 74,
@@ -66,9 +65,9 @@ public sealed class ThumbnailService
         }
 
         await _cacheStore.SaveAsync(
-            imageInfo.FullPath,
-            imageInfo.LastWriteUtcTicks,
-            imageInfo.FileLength,
+            imageInfo.FullName,
+            imageInfo.LastWriteTimeUtc.Ticks,
+            imageInfo.Length,
             safeWidth,
             safeHeight,
             generatedBytes,
