@@ -1,0 +1,44 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Monkasa.Views.DirectoryInputDialog"
+        Width="680"
+        Height="170"
+        MinWidth="680"
+        MinHeight="170"
+        CanResize="False"
+        Title="Open Folder">
+    <Grid Margin="16"
+          RowDefinitions="Auto,Auto,*"
+          RowSpacing="12">
+        <Grid ColumnDefinitions="*,Auto"
+              ColumnSpacing="8">
+            <TextBox x:Name="PathInput"
+                     VerticalAlignment="Center"
+                     PlaceholderText="Input folder path, e.g. ~/Pictures"
+                     KeyDown="OnPathInputKeyDown" />
+            <Button x:Name="BrowseButton"
+                    Grid.Column="1"
+                    Content="Browse"
+                    MinWidth="90"
+                    Click="OnBrowseButtonClick" />
+        </Grid>
+
+        <TextBlock x:Name="BrowseHintText"
+                   Grid.Row="1"
+                   Foreground="#B45309"
+                   Text="Browse is not supported on macOS. Enter a folder path directly."
+                   TextWrapping="Wrap" />
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+            <Button Content="Cancel"
+                    MinWidth="90"
+                    Click="OnCancelButtonClick" />
+            <Button Content="Open"
+                    MinWidth="90"
+                    Click="OnOpenButtonClick" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -35,27 +35,15 @@
                             HorizontalContentAlignment="Center"
                             VerticalContentAlignment="Center"
                             Content="🗂️"
-                            ToolTip.Tip="Add Favorite"
-                            Command="{Binding AddRootDirectoryCommand}" />
-                    <Button Width="34"
-                            Height="30"
-                            Padding="0"
-                            HorizontalContentAlignment="Center"
-                            VerticalContentAlignment="Center"
-                            Content="⇵"
-                            ToolTip.Tip="Sort"
-                            PointerPressed="OnSortButtonPointerPressed">
-                        <Button.ContextMenu>
-                            <ContextMenu Placement="Bottom">
-                                <MenuItem Header="{Binding SortByNameMenuText}"
-                                          Command="{Binding SetSortModeCommand}"
-                                          CommandParameter="Name" />
-                                <MenuItem Header="{Binding SortByTimeMenuText}"
-                                          Command="{Binding SetSortModeCommand}"
-                                          CommandParameter="Time" />
-                            </ContextMenu>
-                        </Button.ContextMenu>
-                    </Button>
+                            ToolTip.Tip="Input Folder Path"
+                            Command="{Binding PromptOpenDirectoryCommand}" />
+                    <ComboBox Width="120"
+                              Height="30"
+                              SelectedIndex="{Binding SortModeIndex, Mode=TwoWay}"
+                              ToolTip.Tip="Sort">
+                        <ComboBoxItem Content="Name" />
+                        <ComboBoxItem Content="Time" />
+                    </ComboBox>
                 </StackPanel>
 
                 <TextBlock Grid.Column="1"

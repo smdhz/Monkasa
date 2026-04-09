@@ -77,25 +77,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnSortButtonPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        if (sender is Button { ContextMenu: { } contextMenu } button)
-        {
-            contextMenu.Open(button);
-            e.Handled = true;
-        }
-    }
-
     private void AttachDeleteConfirmHandler(MainWindowViewModel viewModel)
     {
         viewModel.ConfirmDeleteAsync = ShowDeleteConfirmDialogAsync;
         viewModel.CopyTextAsync = CopyTextToClipboardAsync;
         viewModel.PickDirectoryAsync = PickDirectoryAsync;
+        viewModel.PromptDirectoryInputAsync = ShowDirectoryInputDialogAsync;
     }
 
     private async Task<bool> ShowDeleteConfirmDialogAsync(string title, string message)
@@ -164,6 +151,19 @@ public partial class MainWindow : Window
         }
 
         await clipboard.SetTextAsync(text);
+    }
+
+    private async Task<string?> ShowDirectoryInputDialogAsync(string? initialPath)
+    {
+        var dialog = new DirectoryInputDialog(
+            initialPath,
+            pickDirectoryAsync: PickDirectoryAsync,
+            isBrowseSupported: !OperatingSystem.IsMacOS())
+        {
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+
+        return await dialog.ShowDialog<string?>(this);
     }
 
     private async Task<string?> PickDirectoryAsync()

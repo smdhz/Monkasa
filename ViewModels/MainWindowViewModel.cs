@@ -59,6 +59,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     public Func<string, string, Task<bool>>? ConfirmDeleteAsync { get; set; }
     public Func<string, Task>? CopyTextAsync { get; set; }
     public Func<Task<string?>>? PickDirectoryAsync { get; set; }
+    public Func<string?, Task<string?>>? PromptDirectoryInputAsync { get; set; }
 
     public ObservableCollection<DirectoryTreeNodeViewModel> DirectoryTreeRoots { get; } = [];
 
@@ -66,6 +67,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string currentDirectory = string.Empty;
+
+    [ObservableProperty]
+    private string directoryInputPath = string.Empty;
 
     [ObservableProperty]
     private string statusText = string.Empty;
@@ -91,11 +95,15 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     public string SelectedImageName => SelectedImage?.FileName ?? "No image selected";
     public string HeaderRightText => SelectedImage?.FileName ?? StatusText;
     public string CurrentSortText => CurrentSortMode == ImageSortMode.Time ? "Time" : "Name";
-    public string SortByNameMenuText => CurrentSortMode == ImageSortMode.Name ? "Sort by Name ✔" : "Sort by Name";
-    public string SortByTimeMenuText => CurrentSortMode == ImageSortMode.Time ? "Sort by Time ✔" : "Sort by Time";
+    public int SortModeIndex
+    {
+        get => CurrentSortMode == ImageSortMode.Time ? 1 : 0;
+        set => SetSortMode(value == 1 ? nameof(ImageSortMode.Time) : nameof(ImageSortMode.Name));
+    }
     public bool CanRemoveSelectedRootDirectory => CanRemoveRootDirectory(SelectedDirectoryNode);
     public bool CanAddSelectedDirectoryAsRoot => CanAddDirectoryAsRoot(SelectedDirectoryNode);
     public bool CanDeleteSelectedDirectory => CanDeleteDirectory(SelectedDirectoryNode);
+    public bool IsDirectoryDialogSupported => !OperatingSystem.IsMacOS();
 
     public async Task InitializeAsync()
     {
@@ -242,13 +250,21 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     partial void OnCurrentDirectoryChanged(string value)
     {
         // Persist directory state from the navigation flow where failures can be awaited/retried.
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        if (!string.Equals(DirectoryInputPath, value, _pathComparison))
+        {
+            DirectoryInputPath = value;
+        }
     }
 
     partial void OnCurrentSortModeChanged(ImageSortMode value)
     {
         OnPropertyChanged(nameof(CurrentSortText));
-        OnPropertyChanged(nameof(SortByNameMenuText));
-        OnPropertyChanged(nameof(SortByTimeMenuText));
+        OnPropertyChanged(nameof(SortModeIndex));
     }
 
     private async Task LoadDirectoryAsync(string path, bool synchronizeTreeSelection = true)
@@ -452,8 +468,79 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task AddRootDirectoryAsync()
     {
+        var normalizedPath = ResolveDirectoryInputPath(DirectoryInputPath);
+        if (normalizedPath is null)
+        {
+            SelectedImage = null;
+            StatusText = "Open failed: input a valid folder path";
+            return;
+        }
+
+        if (!Directory.Exists(normalizedPath))
+        {
+            SelectedImage = null;
+            StatusText = $"Directory not found: {normalizedPath}";
+            return;
+        }
+
+        if (PathsEqual(normalizedPath, CurrentDirectory))
+        {
+            SelectedImage = null;
+            StatusText = $"Already opened: {normalizedPath}";
+            return;
+        }
+
+        var addAsRoot = !IsPathCoveredByRoots(normalizedPath);
+
+        if (addAsRoot)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var rootNode = AddRootDirectoryNode(normalizedPath);
+                EnsureNodeChildren(rootNode);
+                PreloadOneMoreFolderLevel(rootNode);
+                rootNode.IsExpanded = true;
+                SelectDirectoryNode(rootNode);
+            });
+
+            await PersistRootDirectoriesAsync();
+        }
+
+        await LoadDirectoryAsync(normalizedPath, synchronizeTreeSelection: true);
+
+        OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+        AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private async Task PromptOpenDirectoryAsync()
+    {
+        if (PromptDirectoryInputAsync is null)
+        {
+            StatusText = "Path input dialog is unavailable";
+            return;
+        }
+
+        var initialPath = string.IsNullOrWhiteSpace(CurrentDirectory)
+            ? DirectoryInputPath
+            : CurrentDirectory;
+
+        var inputPath = await PromptDirectoryInputAsync(initialPath);
+        if (string.IsNullOrWhiteSpace(inputPath))
+        {
+            return;
+        }
+
+        DirectoryInputPath = inputPath;
+        await AddRootDirectoryAsync();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsDirectoryDialogSupported))]
+    private async Task OpenDirectoryDialogAsync()
+    {
         if (PickDirectoryAsync is null)
         {
+            StatusText = "Directory dialog is unavailable";
             return;
         }
 
@@ -463,33 +550,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (!Directory.Exists(pickedDirectory))
-        {
-            StatusText = $"Directory not found: {pickedDirectory}";
-            return;
-        }
-
-        var normalizedPath = NormalizePath(pickedDirectory);
-        if (_treeRootPaths.Any(existingRoot => PathsEqual(existingRoot, normalizedPath)))
-        {
-            StatusText = "Favorite already added";
-            return;
-        }
-
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            var rootNode = AddRootDirectoryNode(normalizedPath);
-            EnsureNodeChildren(rootNode);
-            PreloadOneMoreFolderLevel(rootNode);
-            rootNode.IsExpanded = true;
-            SelectDirectoryNode(rootNode);
-        });
-
-        await PersistRootDirectoriesAsync();
-        await LoadDirectoryAsync(normalizedPath, synchronizeTreeSelection: true);
-
-        OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
-        AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+        DirectoryInputPath = pickedDirectory;
+        await AddRootDirectoryAsync();
     }
 
     [RelayCommand(CanExecute = nameof(CanAddDirectoryAsRoot))]
@@ -874,6 +936,40 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         return false;
+    }
+
+    private string? ResolveDirectoryInputPath(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return null;
+        }
+
+        var candidate = input.Trim();
+        if (candidate.Length > 1 && candidate[0] == '"' && candidate[^1] == '"')
+        {
+            candidate = candidate[1..^1].Trim();
+        }
+
+        if (candidate == "~")
+        {
+            candidate = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+        else if (candidate.StartsWith("~/", StringComparison.Ordinal) ||
+                 candidate.StartsWith("~\\", StringComparison.Ordinal))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            candidate = Path.Combine(home, candidate[2..]);
+        }
+
+        try
+        {
+            return NormalizePath(candidate);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private bool CanRemoveRootDirectory(DirectoryTreeNodeViewModel? node)
