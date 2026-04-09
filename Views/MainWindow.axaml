@@ -41,7 +41,7 @@
                 <TextBlock Grid.Column="2"
                            VerticalAlignment="Center"
                            HorizontalAlignment="Right"
-                           Text="{Binding StatusText}" />
+                           Text="{Binding HeaderRightText}" />
             </Grid>
         </Border>
 
@@ -111,6 +111,9 @@
                                 Background="#F3F4F6">
                             <Border.ContextMenu>
                                 <ContextMenu>
+                                    <MenuItem Header="Copy Full Path"
+                                              Command="{ReflectionBinding DataContext.CopyImagePathCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding .}" />
                                     <MenuItem Header="Delete Image"
                                               Command="{ReflectionBinding DataContext.DeleteImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                               CommandParameter="{Binding .}" />

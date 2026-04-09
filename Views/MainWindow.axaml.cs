@@ -90,6 +90,7 @@ public partial class MainWindow : Window
     private void AttachDeleteConfirmHandler(MainWindowViewModel viewModel)
     {
         viewModel.ConfirmDeleteAsync = ShowDeleteConfirmDialogAsync;
+        viewModel.CopyTextAsync = CopyTextToClipboardAsync;
     }
 
     private async Task<bool> ShowDeleteConfirmDialogAsync(string title, string message)
@@ -147,5 +148,16 @@ public partial class MainWindow : Window
         };
 
         return await dialog.ShowDialog<bool>(this);
+    }
+
+    private async Task CopyTextToClipboardAsync(string text)
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            return;
+        }
+
+        await clipboard.SetTextAsync(text);
     }
 }

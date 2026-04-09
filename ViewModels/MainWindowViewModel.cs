@@ -45,6 +45,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public Func<string, string, Task<bool>>? ConfirmDeleteAsync { get; set; }
+    public Func<string, Task>? CopyTextAsync { get; set; }
 
     public ObservableCollection<DirectoryTreeNodeViewModel> DirectoryTreeRoots { get; } = [];
 
@@ -72,6 +73,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool isViewerOpen;
 
     public string SelectedImageName => SelectedImage?.FileName ?? "No image selected";
+    public string HeaderRightText => SelectedImage?.FileName ?? StatusText;
 
     public async Task InitializeAsync()
     {
@@ -152,6 +154,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     partial void OnSelectedImageChanged(ImageItemViewModel? value)
     {
         OnPropertyChanged(nameof(SelectedImageName));
+        OnPropertyChanged(nameof(HeaderRightText));
 
         if (!IsViewerOpen || value is null)
         {
@@ -312,6 +315,19 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             _logger.LogWarning(ex, "Failed to delete image {Path}", target.FullPath);
             StatusText = $"Delete failed: {target.FileName}";
         }
+    }
+
+    [RelayCommand]
+    private async Task CopyImagePathAsync(ImageItemViewModel? image)
+    {
+        var target = image ?? SelectedImage;
+        if (target is null || CopyTextAsync is null)
+        {
+            return;
+        }
+
+        await CopyTextAsync(target.FullPath);
+        StatusText = $"Path copied: {target.FileName}";
     }
 
     [RelayCommand]
@@ -557,6 +573,11 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         return await ConfirmDeleteAsync(title, message);
+    }
+
+    partial void OnStatusTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HeaderRightText));
     }
 
     private bool PathsEqual(string left, string right)
