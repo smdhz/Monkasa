@@ -31,6 +31,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         : StringComparison.Ordinal;
     private CancellationTokenSource? _directoryLoadCts;
     private CancellationTokenSource? _viewerLoadCts;
+    private readonly Func<Task> _directoryRefreshCallbackAsync;
     private bool _initialized;
     private bool _suppressTreeNavigation;
     private int _viewerIndex = -1;
@@ -53,6 +54,22 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _cacheStore = cacheStore;
         _thumbnailService = thumbnailService;
         _logger = logger;
+        _directoryRefreshCallbackAsync = async () =>
+        {
+            var directoryToRefresh = CurrentDirectory;
+            if (string.IsNullOrWhiteSpace(directoryToRefresh) || !Directory.Exists(directoryToRefresh))
+            {
+                return;
+            }
+
+            Task refreshTask = Task.CompletedTask;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                refreshTask = LoadDirectoryAsync(directoryToRefresh, synchronizeTreeSelection: false);
+            });
+            await refreshTask;
+        };
+        _fileSystemService.DirectoryRefreshRequestedAsync += _directoryRefreshCallbackAsync;
         StatusText = "Ready";
     }
 
@@ -134,12 +151,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         foreach (var rootNode in DirectoryTreeRoots)
         {
             EnsureNodeChildren(rootNode);
-            if (PathsEqual(rootNode.FullPath, _homeDirectoryPath))
-            {
-                PreloadOneMoreFolderLevel(rootNode);
-                rootNode.IsExpanded = true;
-            }
         }
+        ExpandPreferredRootNodeOnStartup();
 
         if (TrySelectNodeByPath(initialDirectory))
         {
@@ -259,6 +272,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             DirectoryInputPath = value;
         }
+
+        _fileSystemService.SetWatchedDirectory(value);
     }
 
     partial void OnCurrentSortModeChanged(ImageSortMode value)
@@ -463,6 +478,19 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
         await CopyTextAsync(target.FullPath);
         StatusText = $"Path copied: {target.FileName}";
+    }
+
+    [RelayCommand]
+    private async Task CopyDirectoryPathAsync(DirectoryTreeNodeViewModel? directoryNode)
+    {
+        var target = directoryNode ?? SelectedDirectoryNode;
+        if (target is null || target.IsPlaceholder || CopyTextAsync is null)
+        {
+            return;
+        }
+
+        await CopyTextAsync(target.FullPath);
+        StatusText = $"Path copied: {target.DisplayName}";
     }
 
     [RelayCommand]
@@ -803,10 +831,30 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             return existingRootNode;
         }
 
-        _treeRootPaths.Add(normalizedRootPath);
         var rootNode = CreateDirectoryNode(normalizedRootPath, parent: null);
-        DirectoryTreeRoots.Add(rootNode);
+        var insertIndex = GetRootInsertIndex(normalizedRootPath);
+        _treeRootPaths.Insert(insertIndex, normalizedRootPath);
+        DirectoryTreeRoots.Insert(insertIndex, rootNode);
         return rootNode;
+    }
+
+    private int GetRootInsertIndex(string normalizedRootPath)
+    {
+        if (PathsEqual(normalizedRootPath, _homeDirectoryPath))
+        {
+            return DirectoryTreeRoots.Count;
+        }
+
+        for (var index = 0; index < DirectoryTreeRoots.Count; index++)
+        {
+            var existingRoot = DirectoryTreeRoots[index];
+            if (!existingRoot.IsPlaceholder && PathsEqual(existingRoot.FullPath, _homeDirectoryPath))
+            {
+                return index;
+            }
+        }
+
+        return DirectoryTreeRoots.Count;
     }
 
     private DirectoryTreeNodeViewModel CreateDirectoryNode(string path, DirectoryTreeNodeViewModel? parent)
@@ -1023,6 +1071,59 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         return !_treeRootPaths.Any(existingRoot => PathsEqual(existingRoot, normalizedPath));
     }
 
+    private void ExpandPreferredRootNodeOnStartup()
+    {
+        var favoriteRoots = DirectoryTreeRoots.Where(rootNode =>
+            !rootNode.IsPlaceholder &&
+            !PathsEqual(rootNode.FullPath, _homeDirectoryPath));
+
+        if (TryExpandRootNodeOnStartup(favoriteRoots))
+        {
+            return;
+        }
+
+        var homeRoot = DirectoryTreeRoots.FirstOrDefault(rootNode =>
+            !rootNode.IsPlaceholder &&
+            PathsEqual(rootNode.FullPath, _homeDirectoryPath));
+
+        if (homeRoot is not null)
+        {
+            ExpandRootNodeOnStartup(homeRoot);
+            return;
+        }
+
+        if (DirectoryTreeRoots.FirstOrDefault(rootNode => !rootNode.IsPlaceholder) is { } firstRoot)
+        {
+            ExpandRootNodeOnStartup(firstRoot);
+        }
+    }
+
+    private bool TryExpandRootNodeOnStartup(IEnumerable<DirectoryTreeNodeViewModel> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (ExpandRootNodeOnStartup(candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool ExpandRootNodeOnStartup(DirectoryTreeNodeViewModel node)
+    {
+        if (node.IsPlaceholder)
+        {
+            return false;
+        }
+
+        EnsureNodeChildren(node);
+        PreloadOneMoreFolderLevel(node);
+        node.IsExpanded = true;
+        return true;
+    }
+
     private void PreloadOneMoreFolderLevel(DirectoryTreeNodeViewModel node)
     {
         foreach (var child in node.Children)
@@ -1116,7 +1217,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
                 return [normalizedHome];
             }
 
-            var roots = new List<string> { normalizedHome };
+            var roots = new List<string>();
             foreach (var candidate in candidates)
             {
                 if (string.IsNullOrWhiteSpace(candidate) || !Directory.Exists(candidate))
@@ -1138,6 +1239,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
                 roots.Add(normalizedCandidate);
             }
 
+            roots.Add(normalizedHome);
             return roots;
         }
         catch (Exception ex)
@@ -1317,6 +1419,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _fileSystemService.DirectoryRefreshRequestedAsync -= _directoryRefreshCallbackAsync;
+        _fileSystemService.SetWatchedDirectory(null);
+
         _directoryLoadCts?.Cancel();
         _viewerLoadCts?.Cancel();
 

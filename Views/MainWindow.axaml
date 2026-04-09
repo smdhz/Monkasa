@@ -71,6 +71,9 @@
                       PointerPressed="OnDirectoryTreePointerPressed">
                 <TreeView.ContextMenu>
                     <ContextMenu>
+                        <MenuItem Header="Copy Full Path"
+                                  Command="{Binding CopyDirectoryPathCommand}"
+                                  CommandParameter="{Binding SelectedDirectoryNode}" />
                         <MenuItem Header="Add to Favorites"
                                   Command="{Binding AddDirectoryAsRootCommand}"
                                   CommandParameter="{Binding SelectedDirectoryNode}"
