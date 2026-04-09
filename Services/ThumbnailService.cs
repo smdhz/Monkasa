@@ -6,6 +6,7 @@ using Avalonia.Media.Imaging;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.Processing;
 
 namespace Monkasa.Services;
@@ -87,7 +88,12 @@ public sealed class ThumbnailService
 
         try
         {
-            var bytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+            var bytes = await ReadPreviewBytesAsync(filePath, cancellationToken);
+            if (bytes is null)
+            {
+                return null;
+            }
+
             return ToBitmap(bytes);
         }
         catch (Exception)
@@ -122,6 +128,67 @@ public sealed class ThumbnailService
                     Size = new Size(targetWidth, targetHeight),
                 });
             });
+
+            await using var outputStream = new MemoryStream();
+            await image.SaveAsJpegAsync(outputStream, new JpegEncoder
+            {
+                Quality = quality,
+            }, cancellationToken);
+
+            return outputStream.ToArray();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<byte[]?> ReadPreviewBytesAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        var requiresAutoOrientation = await RequiresAutoOrientationAsync(filePath, cancellationToken);
+        if (!requiresAutoOrientation)
+        {
+            return await File.ReadAllBytesAsync(filePath, cancellationToken);
+        }
+
+        return await CreateAutoOrientedJpegAsync(
+            filePath,
+            quality: 95,
+            cancellationToken);
+    }
+
+    private static async Task<bool> RequiresAutoOrientationAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        await using var fileStream = File.OpenRead(filePath);
+        var imageInfo = await Image.IdentifyAsync(fileStream, cancellationToken);
+        if (imageInfo?.Metadata.ExifProfile is not ExifProfile exifProfile)
+        {
+            return false;
+        }
+
+        if (!exifProfile.TryGetValue(ExifTag.Orientation, out IExifValue<ushort>? orientationTag))
+        {
+            return false;
+        }
+
+        return orientationTag.Value != 1;
+    }
+
+    private static async Task<byte[]?> CreateAutoOrientedJpegAsync(
+        string filePath,
+        int quality,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var fileStream = File.OpenRead(filePath);
+            using var image = await Image.LoadAsync(fileStream, cancellationToken);
+
+            image.Mutate(context => context.AutoOrient());
 
             await using var outputStream = new MemoryStream();
             await image.SaveAsJpegAsync(outputStream, new JpegEncoder
