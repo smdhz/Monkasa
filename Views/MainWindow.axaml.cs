@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
@@ -15,8 +14,6 @@ namespace Monkasa.Views;
 
 public partial class MainWindow : Window
 {
-    private bool _isPickingDirectory;
-
     public MainWindow()
     {
         InitializeComponent();
@@ -171,34 +168,13 @@ public partial class MainWindow : Window
 
     private async Task<string?> PickDirectoryAsync()
     {
-        if (_isPickingDirectory)
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            return null;
-        }
+            Title = "Select Favorite Folder",
+            AllowMultiple = false,
+        });
 
-        _isPickingDirectory = true;
-        try
-        {
-            var currentPath = (DataContext as MainWindowViewModel)?.CurrentDirectory;
-            IStorageFolder? suggestedStartLocation = null;
-            if (!string.IsNullOrWhiteSpace(currentPath) && Directory.Exists(currentPath))
-            {
-                suggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(currentPath);
-            }
-
-            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-            {
-                Title = "Select Favorite Folder",
-                AllowMultiple = false,
-                SuggestedStartLocation = suggestedStartLocation,
-            });
-
-            var selectedFolder = folders.FirstOrDefault();
-            return selectedFolder?.TryGetLocalPath();
-        }
-        finally
-        {
-            _isPickingDirectory = false;
-        }
+        var selectedFolder = folders.FirstOrDefault();
+        return selectedFolder?.TryGetLocalPath();
     }
 }
