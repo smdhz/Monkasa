@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
@@ -17,6 +18,7 @@ namespace Monkasa.ViewModels;
 public partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private const string LastOpenedDirectoryStateKey = "last_opened_directory";
+    private const string RootDirectoriesStateKey = "root_directories";
     private const int ThumbnailWidth = 320;
     private const int ThumbnailHeight = 220;
 
@@ -32,7 +34,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _initialized;
     private bool _suppressTreeNavigation;
     private int _viewerIndex = -1;
-    private string _treeRootPath = string.Empty;
+    private readonly List<string> _treeRootPaths = [];
+    private string _homeDirectoryPath = string.Empty;
 
     public enum ImageSortMode
     {
@@ -55,6 +58,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public Func<string, string, Task<bool>>? ConfirmDeleteAsync { get; set; }
     public Func<string, Task>? CopyTextAsync { get; set; }
+    public Func<Task<string?>>? PickDirectoryAsync { get; set; }
 
     public ObservableCollection<DirectoryTreeNodeViewModel> DirectoryTreeRoots { get; } = [];
 
@@ -89,6 +93,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     public string CurrentSortText => CurrentSortMode == ImageSortMode.Time ? "Time" : "Name";
     public string SortByNameMenuText => CurrentSortMode == ImageSortMode.Name ? "Sort by Name ✔" : "Sort by Name";
     public string SortByTimeMenuText => CurrentSortMode == ImageSortMode.Time ? "Sort by Time ✔" : "Sort by Time";
+    public bool CanRemoveSelectedRootDirectory => CanRemoveRootDirectory(SelectedDirectoryNode);
+    public bool CanAddSelectedDirectoryAsRoot => CanAddDirectoryAsRoot(SelectedDirectoryNode);
+    public bool CanDeleteSelectedDirectory => CanDeleteDirectory(SelectedDirectoryNode);
 
     public async Task InitializeAsync()
     {
@@ -105,19 +112,38 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             homeDirectory = Directory.GetCurrentDirectory();
         }
 
+        _homeDirectoryPath = NormalizePath(homeDirectory);
         var initialDirectory = await GetInitialDirectoryAsync(homeDirectory);
-        var rootDirectory = IsSameOrChildPath(homeDirectory, initialDirectory)
-            ? homeDirectory
-            : initialDirectory;
 
-        BuildDirectoryTree(rootDirectory);
+        var initialRootDirectories = await GetInitialRootDirectoriesAsync(_homeDirectoryPath);
+        BuildDirectoryTree(initialRootDirectories);
+        if (!IsPathCoveredByRoots(initialDirectory))
+        {
+            AddRootDirectoryNode(initialDirectory);
+            await PersistRootDirectoriesAsync();
+        }
 
-        if (DirectoryTreeRoots.FirstOrDefault() is { } rootNode)
+        foreach (var rootNode in DirectoryTreeRoots)
         {
             EnsureNodeChildren(rootNode);
-            PreloadOneMoreFolderLevel(rootNode);
-            rootNode.IsExpanded = true;
-            SelectDirectoryNode(rootNode);
+            if (PathsEqual(rootNode.FullPath, _homeDirectoryPath))
+            {
+                PreloadOneMoreFolderLevel(rootNode);
+                rootNode.IsExpanded = true;
+            }
+        }
+
+        if (TrySelectNodeByPath(initialDirectory))
+        {
+            if (SelectedDirectoryNode is { } selectedNode)
+            {
+                EnsureNodeChildren(selectedNode);
+                PreloadOneMoreFolderLevel(selectedNode);
+            }
+        }
+        else if (DirectoryTreeRoots.FirstOrDefault() is { } firstRootNode)
+        {
+            SelectDirectoryNode(firstRootNode);
         }
 
         await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: true);
@@ -176,6 +202,13 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedDirectoryNodeChanged(DirectoryTreeNodeViewModel? value)
     {
+        OnPropertyChanged(nameof(CanRemoveSelectedRootDirectory));
+        OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+        OnPropertyChanged(nameof(CanDeleteSelectedDirectory));
+        RemoveRootDirectoryCommand.NotifyCanExecuteChanged();
+        AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+        DeleteDirectoryCommand.NotifyCanExecuteChanged();
+
         if (_suppressTreeNavigation || value is null || value.IsPlaceholder)
         {
             return;
@@ -417,39 +450,194 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task DeleteDirectoryAsync(DirectoryTreeNodeViewModel? directoryNode)
+    private async Task AddRootDirectoryAsync()
     {
-        var target = directoryNode ?? SelectedDirectoryNode;
-        if (target is null || target.IsPlaceholder || target.Parent is null)
+        if (PickDirectoryAsync is null)
         {
             return;
         }
 
+        var pickedDirectory = await PickDirectoryAsync();
+        if (string.IsNullOrWhiteSpace(pickedDirectory))
+        {
+            return;
+        }
+
+        if (!Directory.Exists(pickedDirectory))
+        {
+            StatusText = $"Directory not found: {pickedDirectory}";
+            return;
+        }
+
+        var normalizedPath = NormalizePath(pickedDirectory);
+        if (_treeRootPaths.Any(existingRoot => PathsEqual(existingRoot, normalizedPath)))
+        {
+            StatusText = "Favorite already added";
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var rootNode = AddRootDirectoryNode(normalizedPath);
+            EnsureNodeChildren(rootNode);
+            PreloadOneMoreFolderLevel(rootNode);
+            rootNode.IsExpanded = true;
+            SelectDirectoryNode(rootNode);
+        });
+
+        await PersistRootDirectoriesAsync();
+        await LoadDirectoryAsync(normalizedPath, synchronizeTreeSelection: true);
+
+        OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+        AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAddDirectoryAsRoot))]
+    private async Task AddDirectoryAsRootAsync(DirectoryTreeNodeViewModel? directoryNode)
+    {
+        var target = directoryNode ?? SelectedDirectoryNode;
+        if (!CanAddDirectoryAsRoot(target))
+        {
+            return;
+        }
+
+        var normalizedPath = NormalizePath(target!.FullPath);
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var rootNode = AddRootDirectoryNode(normalizedPath);
+            EnsureNodeChildren(rootNode);
+            PreloadOneMoreFolderLevel(rootNode);
+            rootNode.IsExpanded = true;
+        });
+
+        await PersistRootDirectoriesAsync();
+        StatusText = $"Added favorite: {target.DisplayName}";
+
+        OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+        AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveRootDirectory))]
+    private async Task RemoveRootDirectoryAsync(DirectoryTreeNodeViewModel? directoryNode)
+    {
+        var target = directoryNode ?? SelectedDirectoryNode;
+        if (!CanRemoveRootDirectory(target))
+        {
+            return;
+        }
+
+        var removedPath = NormalizePath(target!.FullPath);
+        var nextDirectory = CurrentDirectory;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            DirectoryTreeRoots.Remove(target);
+            _treeRootPaths.RemoveAll(rootPath => PathsEqual(rootPath, removedPath));
+
+            if (IsSameOrChildPath(removedPath, nextDirectory) || !IsPathCoveredByRoots(nextDirectory))
+            {
+                nextDirectory = _homeDirectoryPath;
+            }
+
+            if (!IsPathCoveredByRoots(nextDirectory))
+            {
+                nextDirectory = DirectoryTreeRoots.FirstOrDefault()?.FullPath ?? _homeDirectoryPath;
+            }
+
+            if (DirectoryTreeRoots.Count > 0)
+            {
+                TrySelectNodeByPath(nextDirectory);
+            }
+
+            OnPropertyChanged(nameof(CanRemoveSelectedRootDirectory));
+            OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+            RemoveRootDirectoryCommand.NotifyCanExecuteChanged();
+            AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+        });
+
+        await PersistRootDirectoriesAsync();
+
+        if (Directory.Exists(nextDirectory))
+        {
+            await LoadDirectoryAsync(nextDirectory, synchronizeTreeSelection: true);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDeleteDirectory))]
+    private async Task DeleteDirectoryAsync(DirectoryTreeNodeViewModel? directoryNode)
+    {
+        var target = directoryNode ?? SelectedDirectoryNode;
+        if (!CanDeleteDirectory(target))
+        {
+            return;
+        }
+
+        var targetPath = NormalizePath(target!.FullPath);
         var confirmed = await ConfirmDeletionOrDefaultAsync(
             "Delete Folder",
-            $"Delete this folder and all contents?\n\n{target.FullPath}");
+            $"Delete this folder and all subfolders?\n\n{targetPath}");
 
         if (!confirmed)
         {
             return;
         }
 
-        var nextDirectory = target.Parent.FullPath;
+        var fallbackDirectory = CurrentDirectory;
+        if (IsSameOrChildPath(targetPath, fallbackDirectory))
+        {
+            fallbackDirectory = target.Parent?.FullPath ?? _homeDirectoryPath;
+        }
 
         try
         {
-            _fileSystemService.DeleteDirectory(target.FullPath, recursive: true);
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                RebuildDirectoryTreeAndTrySelect(nextDirectory);
-            });
-
-            await LoadDirectoryAsync(nextDirectory, synchronizeTreeSelection: true);
+            _fileSystemService.DeleteDirectory(targetPath, recursive: true);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to delete folder {Path}", target.FullPath);
+            _logger.LogWarning(ex, "Failed to delete directory {Path}", targetPath);
             StatusText = $"Delete failed: {target.DisplayName}";
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (target.Parent is null)
+            {
+                DirectoryTreeRoots.Remove(target);
+                _treeRootPaths.RemoveAll(rootPath => PathsEqual(rootPath, targetPath));
+            }
+            else
+            {
+                target.Parent.Children.Remove(target);
+                target.Parent.ChildrenLoaded = true;
+
+                if (target.Parent.Children.Count == 0)
+                {
+                    target.Parent.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(target.Parent));
+                    target.Parent.ChildrenLoaded = false;
+                }
+            }
+
+            OnPropertyChanged(nameof(CanRemoveSelectedRootDirectory));
+            OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
+            OnPropertyChanged(nameof(CanDeleteSelectedDirectory));
+            RemoveRootDirectoryCommand.NotifyCanExecuteChanged();
+            AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
+            DeleteDirectoryCommand.NotifyCanExecuteChanged();
+        });
+
+        await PersistRootDirectoriesAsync();
+
+        if (!Directory.Exists(fallbackDirectory) || !IsPathCoveredByRoots(fallbackDirectory))
+        {
+            fallbackDirectory = DirectoryTreeRoots.FirstOrDefault()?.FullPath ?? _homeDirectoryPath;
+        }
+
+        if (Directory.Exists(fallbackDirectory))
+        {
+            await LoadDirectoryAsync(fallbackDirectory, synchronizeTreeSelection: true);
+            StatusText = $"Deleted folder: {target.DisplayName}";
         }
     }
 
@@ -533,12 +721,30 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void BuildDirectoryTree(string rootPath)
+    private void BuildDirectoryTree(IEnumerable<string> rootPaths)
     {
-        _treeRootPath = NormalizePath(rootPath);
+        _treeRootPaths.Clear();
         DirectoryTreeRoots.Clear();
-        var rootNode = CreateDirectoryNode(_treeRootPath, parent: null);
+
+        foreach (var rootPath in rootPaths)
+        {
+            AddRootDirectoryNode(rootPath);
+        }
+    }
+
+    private DirectoryTreeNodeViewModel AddRootDirectoryNode(string rootPath)
+    {
+        var normalizedRootPath = NormalizePath(rootPath);
+        var existingRootNode = DirectoryTreeRoots.FirstOrDefault(rootNode => PathsEqual(rootNode.FullPath, normalizedRootPath));
+        if (existingRootNode is not null)
+        {
+            return existingRootNode;
+        }
+
+        _treeRootPaths.Add(normalizedRootPath);
+        var rootNode = CreateDirectoryNode(normalizedRootPath, parent: null);
         DirectoryTreeRoots.Add(rootNode);
+        return rootNode;
     }
 
     private DirectoryTreeNodeViewModel CreateDirectoryNode(string path, DirectoryTreeNodeViewModel? parent)
@@ -577,56 +783,76 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private bool TrySelectNodeByPath(string path)
     {
-        var targetPath = NormalizePath(path);
-
-        foreach (var rootNode in DirectoryTreeRoots)
+        if (string.IsNullOrWhiteSpace(path))
         {
-            var targetNode = ExpandToPath(rootNode, targetPath);
-            if (targetNode is not null)
-            {
-                SelectDirectoryNode(targetNode);
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        var targetPath = NormalizePath(path);
+        var firstMatchingRoot = DirectoryTreeRoots.FirstOrDefault(rootNode =>
+            !rootNode.IsPlaceholder && IsSameOrChildPath(rootNode.FullPath, targetPath));
+
+        if (firstMatchingRoot is null)
+        {
+            return false;
+        }
+
+        var targetNode = ExpandToPath(firstMatchingRoot, targetPath);
+        if (targetNode is null)
+        {
+            return false;
+        }
+
+        SelectDirectoryNode(targetNode);
+        return true;
     }
 
     private DirectoryTreeNodeViewModel? ExpandToPath(DirectoryTreeNodeViewModel startNode, string targetPath)
     {
-        var currentPath = NormalizePath(startNode.FullPath);
-        if (!IsSameOrChildPath(currentPath, targetPath))
+        if (startNode.IsPlaceholder)
         {
             return null;
         }
 
-        if (!startNode.ChildrenLoaded)
+        var currentNode = startNode;
+        while (true)
         {
-            EnsureNodeChildren(startNode);
-        }
-
-        if (PathsEqual(currentPath, targetPath))
-        {
-            return startNode;
-        }
-
-        startNode.IsExpanded = true;
-
-        foreach (var child in startNode.Children)
-        {
-            if (child.IsPlaceholder)
+            var currentPath = NormalizePath(currentNode.FullPath);
+            if (!IsSameOrChildPath(currentPath, targetPath))
             {
-                continue;
+                return null;
             }
 
-            var match = ExpandToPath(child, targetPath);
-            if (match is not null)
+            if (PathsEqual(currentPath, targetPath))
             {
-                return match;
+                return currentNode;
             }
-        }
 
-        return null;
+            currentNode.IsExpanded = true;
+            EnsureNodeChildren(currentNode);
+
+            DirectoryTreeNodeViewModel? nextNode = null;
+            foreach (var child in currentNode.Children)
+            {
+                if (child.IsPlaceholder)
+                {
+                    continue;
+                }
+
+                if (IsSameOrChildPath(child.FullPath, targetPath))
+                {
+                    nextNode = child;
+                    break;
+                }
+            }
+
+            if (nextNode is null)
+            {
+                return null;
+            }
+
+            currentNode = nextNode;
+        }
     }
 
     private void SelectDirectoryNode(DirectoryTreeNodeViewModel node)
@@ -636,36 +862,69 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _suppressTreeNavigation = false;
     }
 
-    private void RebuildDirectoryTreeAndTrySelect(string preferredPath)
+    private bool IsPathCoveredByRoots(string path)
     {
-        var rootPath = _treeRootPath;
-        if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+        var normalizedPath = NormalizePath(path);
+        foreach (var rootPath in _treeRootPaths)
         {
-            rootPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+            if (IsSameOrChildPath(rootPath, normalizedPath))
             {
-                rootPath = Directory.GetCurrentDirectory();
+                return true;
             }
         }
 
-        BuildDirectoryTree(rootPath);
+        return false;
+    }
 
-        if (DirectoryTreeRoots.FirstOrDefault() is { } rootNode)
+    private bool CanRemoveRootDirectory(DirectoryTreeNodeViewModel? node)
+    {
+        if (node is null || node.IsPlaceholder)
         {
-            EnsureNodeChildren(rootNode);
-            PreloadOneMoreFolderLevel(rootNode);
-            rootNode.IsExpanded = true;
-            SelectDirectoryNode(rootNode);
+            return false;
         }
 
-        if (Directory.Exists(preferredPath))
+        if (node.Parent is not null)
         {
-            if (TrySelectNodeByPath(preferredPath) && SelectedDirectoryNode is { } selectedNode)
-            {
-                EnsureNodeChildren(selectedNode);
-                PreloadOneMoreFolderLevel(selectedNode);
-            }
+            return false;
         }
+
+        if (PathsEqual(node.FullPath, _homeDirectoryPath))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool CanDeleteDirectory(DirectoryTreeNodeViewModel? node)
+    {
+        if (node is null || node.IsPlaceholder)
+        {
+            return false;
+        }
+
+        if (PathsEqual(node.FullPath, _homeDirectoryPath))
+        {
+            return false;
+        }
+
+        return Directory.Exists(node.FullPath);
+    }
+
+    private bool CanAddDirectoryAsRoot(DirectoryTreeNodeViewModel? node)
+    {
+        if (node is null || node.IsPlaceholder)
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(node.FullPath))
+        {
+            return false;
+        }
+
+        var normalizedPath = NormalizePath(node.FullPath);
+        return !_treeRootPaths.Any(existingRoot => PathsEqual(existingRoot, normalizedPath));
     }
 
     private void PreloadOneMoreFolderLevel(DirectoryTreeNodeViewModel node)
@@ -739,6 +998,84 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             _logger.LogDebug(ex, "Unable to persist current directory {Directory}", directory);
         }
     }
+
+    private async Task<IReadOnlyList<string>> GetInitialRootDirectoriesAsync(string homeDirectory)
+    {
+        var normalizedHome = NormalizePath(homeDirectory);
+
+        try
+        {
+            var serializedRoots = await _cacheStore.TryGetStateValueAsync(
+                RootDirectoriesStateKey,
+                CancellationToken.None);
+
+            if (string.IsNullOrWhiteSpace(serializedRoots))
+            {
+                return [normalizedHome];
+            }
+
+            var candidates = JsonSerializer.Deserialize<List<string>>(serializedRoots);
+            if (candidates is null || candidates.Count == 0)
+            {
+                return [normalizedHome];
+            }
+
+            var roots = new List<string> { normalizedHome };
+            foreach (var candidate in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(candidate) || !Directory.Exists(candidate))
+                {
+                    continue;
+                }
+
+                var normalizedCandidate = NormalizePath(candidate);
+                if (PathsEqual(normalizedCandidate, normalizedHome))
+                {
+                    continue;
+                }
+
+                if (roots.Any(existing => PathsEqual(existing, normalizedCandidate)))
+                {
+                    continue;
+                }
+
+                roots.Add(normalizedCandidate);
+            }
+
+            return roots;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to load root directories from state");
+            return [normalizedHome];
+        }
+    }
+
+    private async Task PersistRootDirectoriesAsync()
+    {
+        try
+        {
+            var roots = _treeRootPaths
+                .Where(path => !PathsEqual(path, _homeDirectoryPath))
+                .Where(Directory.Exists)
+                .Distinct(StringComparerFromPathComparison())
+                .ToArray();
+
+            await _cacheStore.SaveStateValueAsync(
+                RootDirectoriesStateKey,
+                JsonSerializer.Serialize(roots),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to persist root directories");
+        }
+    }
+
+    private StringComparer StringComparerFromPathComparison()
+        => _pathComparison == StringComparison.OrdinalIgnoreCase
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
 
     partial void OnStatusTextChanged(string value)
     {

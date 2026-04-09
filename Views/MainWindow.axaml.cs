@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -6,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Monkasa.ViewModels;
 
 namespace Monkasa.Views;
@@ -93,6 +95,7 @@ public partial class MainWindow : Window
     {
         viewModel.ConfirmDeleteAsync = ShowDeleteConfirmDialogAsync;
         viewModel.CopyTextAsync = CopyTextToClipboardAsync;
+        viewModel.PickDirectoryAsync = PickDirectoryAsync;
     }
 
     private async Task<bool> ShowDeleteConfirmDialogAsync(string title, string message)
@@ -161,5 +164,17 @@ public partial class MainWindow : Window
         }
 
         await clipboard.SetTextAsync(text);
+    }
+
+    private async Task<string?> PickDirectoryAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Select Favorite Folder",
+            AllowMultiple = false,
+        });
+
+        var selectedFolder = folders.FirstOrDefault();
+        return selectedFolder?.TryGetLocalPath();
     }
 }
