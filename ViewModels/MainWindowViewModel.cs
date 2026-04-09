@@ -1,0 +1,654 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
+using Monkasa.Models;
+using Monkasa.Services;
+
+namespace Monkasa.ViewModels;
+
+public partial class MainWindowViewModel : ObservableObject, IDisposable
+{
+    private const int ThumbnailWidth = 320;
+    private const int ThumbnailHeight = 220;
+    private const int PreviewMaxSize = 1600;
+
+    private readonly IFileSystemService _fileSystemService;
+    private readonly IThumbnailService _thumbnailService;
+    private readonly ILogger<MainWindowViewModel> _logger;
+    private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+    private CancellationTokenSource? _directoryLoadCts;
+    private CancellationTokenSource? _viewerLoadCts;
+    private bool _initialized;
+    private bool _suppressTreeNavigation;
+    private int _viewerIndex = -1;
+
+    public MainWindowViewModel(
+        IFileSystemService fileSystemService,
+        IThumbnailService thumbnailService,
+        ILogger<MainWindowViewModel> logger)
+    {
+        _fileSystemService = fileSystemService;
+        _thumbnailService = thumbnailService;
+        _logger = logger;
+        StatusText = "Ready";
+    }
+
+    public Func<string, string, Task<bool>>? ConfirmDeleteAsync { get; set; }
+
+    public ObservableCollection<DirectoryTreeNodeViewModel> DirectoryTreeRoots { get; } = [];
+
+    public ObservableCollection<ImageItemViewModel> Images { get; } = [];
+
+    [ObservableProperty]
+    private string currentDirectory = string.Empty;
+
+    [ObservableProperty]
+    private string statusText = string.Empty;
+
+    [ObservableProperty]
+    private bool isBusy;
+
+    [ObservableProperty]
+    private DirectoryTreeNodeViewModel? selectedDirectoryNode;
+
+    [ObservableProperty]
+    private ImageItemViewModel? selectedImage;
+
+    [ObservableProperty]
+    private Bitmap? viewerImage;
+
+    [ObservableProperty]
+    private bool isViewerOpen;
+
+    public string SelectedImageName => SelectedImage?.FileName ?? "No image selected";
+
+    public async Task InitializeAsync()
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        _initialized = true;
+
+        var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(homeDirectory) || !Directory.Exists(homeDirectory))
+        {
+            homeDirectory = Directory.GetCurrentDirectory();
+        }
+
+        BuildDirectoryTree(homeDirectory);
+
+        if (DirectoryTreeRoots.FirstOrDefault() is { } rootNode)
+        {
+            EnsureNodeChildren(rootNode);
+            rootNode.IsExpanded = true;
+            SelectDirectoryNode(rootNode);
+        }
+
+        await LoadDirectoryAsync(homeDirectory, synchronizeTreeSelection: false);
+    }
+
+    [RelayCommand]
+    private Task RefreshAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentDirectory))
+        {
+            return Task.CompletedTask;
+        }
+
+        return LoadDirectoryAsync(CurrentDirectory);
+    }
+
+    [RelayCommand]
+    private Task GoParentAsync()
+    {
+        if (SelectedDirectoryNode?.Parent is { IsPlaceholder: false } parentNode)
+        {
+            SelectDirectoryNode(parentNode);
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(CurrentDirectory))
+        {
+            return Task.CompletedTask;
+        }
+
+        var parent = Directory.GetParent(CurrentDirectory);
+        if (parent is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return LoadDirectoryAsync(parent.FullName);
+    }
+
+    partial void OnSelectedDirectoryNodeChanged(DirectoryTreeNodeViewModel? value)
+    {
+        if (_suppressTreeNavigation || value is null || value.IsPlaceholder)
+        {
+            return;
+        }
+
+        if (PathsEqual(value.FullPath, CurrentDirectory))
+        {
+            return;
+        }
+
+        _ = LoadDirectoryAsync(value.FullPath, synchronizeTreeSelection: false);
+    }
+
+    partial void OnSelectedImageChanged(ImageItemViewModel? value)
+    {
+        OnPropertyChanged(nameof(SelectedImageName));
+
+        if (!IsViewerOpen || value is null)
+        {
+            return;
+        }
+
+        _viewerIndex = Images.IndexOf(value);
+        _ = LoadViewerImageAsync(value);
+    }
+
+    private async Task LoadDirectoryAsync(string path, bool synchronizeTreeSelection = true)
+    {
+        if (!Directory.Exists(path))
+        {
+            StatusText = $"Directory not found: {path}";
+            return;
+        }
+
+        var fullPath = NormalizePath(path);
+        var currentLoadCts = ReplaceDirectoryTokenSource();
+        var cancellationToken = currentLoadCts.Token;
+
+        IsBusy = true;
+        StatusText = $"Loading {fullPath}";
+
+        try
+        {
+            var imageFiles = _fileSystemService.GetImages(fullPath);
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                CurrentDirectory = fullPath;
+                ReplaceImages(imageFiles);
+                SelectedImage = null;
+                CloseViewer();
+
+                if (synchronizeTreeSelection)
+                {
+                    _ = TrySelectNodeByPath(fullPath);
+                }
+
+                StatusText = $"{imageFiles.Count} images";
+            });
+
+            await LoadThumbnailsAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Navigation changed while loading.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load directory {Directory}", fullPath);
+            StatusText = $"Failed to load: {fullPath}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_directoryLoadCts, currentLoadCts))
+            {
+                IsBusy = false;
+            }
+        }
+    }
+
+    private async Task LoadThumbnailsAsync(CancellationToken cancellationToken)
+    {
+        var snapshot = Images.ToArray();
+
+        var options = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount / 2),
+        };
+
+        await Parallel.ForEachAsync(snapshot, options, async (item, token) =>
+        {
+            var thumbnail = await _thumbnailService.GetThumbnailAsync(item.ImageInfo, ThumbnailWidth, ThumbnailHeight, token);
+            if (thumbnail is null)
+            {
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested)
+                {
+                    item.SetThumbnail(thumbnail);
+                }
+                else
+                {
+                    thumbnail.Dispose();
+                }
+            });
+        });
+    }
+
+    [RelayCommand]
+    private Task OpenViewerAsync()
+    {
+        if (SelectedImage is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsViewerOpen = true;
+        _viewerIndex = Images.IndexOf(SelectedImage);
+        return LoadViewerImageAsync(SelectedImage);
+    }
+
+    [RelayCommand]
+    private Task NextImageAsync() => NavigateViewerAsync(step: +1);
+
+    [RelayCommand]
+    private Task PreviousImageAsync() => NavigateViewerAsync(step: -1);
+
+    [RelayCommand]
+    private Task DeleteCurrentImageAsync()
+    {
+        if (!IsViewerOpen || SelectedImage is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return DeleteImageAsync(SelectedImage);
+    }
+
+    [RelayCommand]
+    private async Task DeleteImageAsync(ImageItemViewModel? image)
+    {
+        var target = image ?? SelectedImage;
+        if (target is null)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmDeletionOrDefaultAsync(
+            "Delete Image",
+            $"Delete this image?\n\n{target.FullPath}");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            _fileSystemService.DeleteFile(target.FullPath);
+
+            if (ReferenceEquals(SelectedImage, target))
+            {
+                SetViewerImage(null);
+            }
+
+            await LoadDirectoryAsync(CurrentDirectory);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete image {Path}", target.FullPath);
+            StatusText = $"Delete failed: {target.FileName}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteDirectoryAsync(DirectoryTreeNodeViewModel? directoryNode)
+    {
+        var target = directoryNode ?? SelectedDirectoryNode;
+        if (target is null || target.IsPlaceholder || target.Parent is null)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmDeletionOrDefaultAsync(
+            "Delete Folder",
+            $"Delete this folder and all contents?\n\n{target.FullPath}");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var nextDirectory = target.Parent.FullPath;
+
+        try
+        {
+            _fileSystemService.DeleteDirectory(target.FullPath, recursive: true);
+
+            if (PathsEqual(CurrentDirectory, target.FullPath) || IsSameOrChildPath(target.FullPath, CurrentDirectory))
+            {
+                await LoadDirectoryAsync(nextDirectory);
+            }
+            else
+            {
+                await LoadDirectoryAsync(CurrentDirectory);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete folder {Path}", target.FullPath);
+            StatusText = $"Delete failed: {target.DisplayName}";
+        }
+    }
+
+    [RelayCommand]
+    private void CloseViewer()
+    {
+        IsViewerOpen = false;
+        _viewerIndex = -1;
+
+        _viewerLoadCts?.Cancel();
+        _viewerLoadCts?.Dispose();
+        _viewerLoadCts = null;
+
+        SetViewerImage(null);
+    }
+
+    private Task NavigateViewerAsync(int step)
+    {
+        if (!IsViewerOpen || Images.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_viewerIndex < 0 && SelectedImage is not null)
+        {
+            _viewerIndex = Images.IndexOf(SelectedImage);
+        }
+
+        if (_viewerIndex < 0)
+        {
+            _viewerIndex = 0;
+        }
+
+        var nextIndex = (_viewerIndex + step + Images.Count) % Images.Count;
+        _viewerIndex = nextIndex;
+        SelectedImage = Images[nextIndex];
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadViewerImageAsync(ImageItemViewModel? image)
+    {
+        var currentViewerCts = ReplaceViewerTokenSource();
+        var cancellationToken = currentViewerCts.Token;
+
+        if (image is null)
+        {
+            SetViewerImage(null);
+            return;
+        }
+
+        try
+        {
+            StatusText = $"Loading: {image.FileName}";
+            var preview = await _thumbnailService.GetPreviewAsync(image.FullPath, PreviewMaxSize, cancellationToken);
+
+            if (preview is null || cancellationToken.IsCancellationRequested)
+            {
+                preview?.Dispose();
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    preview.Dispose();
+                    return;
+                }
+
+                SetViewerImage(preview);
+                StatusText = image.FileName;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to render preview for {Path}", image.FullPath);
+            StatusText = $"Failed to render: {image.FileName}";
+        }
+    }
+
+    private void BuildDirectoryTree(string rootPath)
+    {
+        DirectoryTreeRoots.Clear();
+        var rootNode = CreateDirectoryNode(rootPath, parent: null);
+        DirectoryTreeRoots.Add(rootNode);
+    }
+
+    private DirectoryTreeNodeViewModel CreateDirectoryNode(string path, DirectoryTreeNodeViewModel? parent)
+    {
+        var node = new DirectoryTreeNodeViewModel(
+            path,
+            DirectoryTreeNodeViewModel.GetDisplayName(path),
+            parent,
+            EnsureNodeChildren);
+
+        if (HasSubdirectories(path))
+        {
+            node.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(node));
+        }
+
+        return node;
+    }
+
+    private void EnsureNodeChildren(DirectoryTreeNodeViewModel node)
+    {
+        if (node.IsPlaceholder || node.ChildrenLoaded)
+        {
+            return;
+        }
+
+        var children = _fileSystemService.GetDirectories(node.FullPath);
+
+        node.Children.Clear();
+        foreach (var childPath in children)
+        {
+            node.Children.Add(CreateDirectoryNode(childPath, node));
+        }
+
+        node.ChildrenLoaded = true;
+    }
+
+    private bool TrySelectNodeByPath(string path)
+    {
+        var targetPath = NormalizePath(path);
+
+        foreach (var rootNode in DirectoryTreeRoots)
+        {
+            var targetNode = ExpandToPath(rootNode, targetPath);
+            if (targetNode is not null)
+            {
+                SelectDirectoryNode(targetNode);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private DirectoryTreeNodeViewModel? ExpandToPath(DirectoryTreeNodeViewModel startNode, string targetPath)
+    {
+        var currentPath = NormalizePath(startNode.FullPath);
+        if (!IsSameOrChildPath(currentPath, targetPath))
+        {
+            return null;
+        }
+
+        if (!startNode.ChildrenLoaded)
+        {
+            EnsureNodeChildren(startNode);
+        }
+
+        if (PathsEqual(currentPath, targetPath))
+        {
+            return startNode;
+        }
+
+        startNode.IsExpanded = true;
+
+        foreach (var child in startNode.Children)
+        {
+            if (child.IsPlaceholder)
+            {
+                continue;
+            }
+
+            var match = ExpandToPath(child, targetPath);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private void SelectDirectoryNode(DirectoryTreeNodeViewModel node)
+    {
+        _suppressTreeNavigation = true;
+        SelectedDirectoryNode = node;
+        _suppressTreeNavigation = false;
+    }
+
+    private bool HasSubdirectories(string path)
+    {
+        try
+        {
+            using var enumerator = _fileSystemService.GetDirectories(path).GetEnumerator();
+            return enumerator.MoveNext();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<bool> ConfirmDeletionOrDefaultAsync(string title, string message)
+    {
+        if (ConfirmDeleteAsync is null)
+        {
+            return false;
+        }
+
+        return await ConfirmDeleteAsync(title, message);
+    }
+
+    private bool PathsEqual(string left, string right)
+        => string.Equals(NormalizePath(left), NormalizePath(right), _pathComparison);
+
+    private bool IsSameOrChildPath(string candidateAncestor, string targetPath)
+    {
+        if (PathsEqual(candidateAncestor, targetPath))
+        {
+            return true;
+        }
+
+        var withSeparator = EnsureTrailingSeparator(candidateAncestor);
+        var targetWithSeparator = EnsureTrailingSeparator(targetPath);
+        return targetWithSeparator.StartsWith(withSeparator, _pathComparison);
+    }
+
+    private static string NormalizePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+
+        if (fullPath.Length == 1 && (fullPath[0] == Path.DirectorySeparatorChar || fullPath[0] == Path.AltDirectorySeparatorChar))
+        {
+            return fullPath;
+        }
+
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        if (path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            return path;
+        }
+
+        return path + Path.DirectorySeparatorChar;
+    }
+
+    private void ReplaceImages(IReadOnlyList<ImageFileInfo> imageFiles)
+    {
+        foreach (var image in Images)
+        {
+            image.Dispose();
+        }
+
+        Images.Clear();
+
+        foreach (var image in imageFiles)
+        {
+            Images.Add(new ImageItemViewModel(image));
+        }
+    }
+
+    private CancellationTokenSource ReplaceDirectoryTokenSource()
+    {
+        _directoryLoadCts?.Cancel();
+        _directoryLoadCts?.Dispose();
+        _directoryLoadCts = new CancellationTokenSource();
+        return _directoryLoadCts;
+    }
+
+    private CancellationTokenSource ReplaceViewerTokenSource()
+    {
+        _viewerLoadCts?.Cancel();
+        _viewerLoadCts?.Dispose();
+        _viewerLoadCts = new CancellationTokenSource();
+        return _viewerLoadCts;
+    }
+
+    private void SetViewerImage(Bitmap? bitmap)
+    {
+        var previous = ViewerImage;
+        ViewerImage = bitmap;
+        previous?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        _directoryLoadCts?.Cancel();
+        _viewerLoadCts?.Cancel();
+
+        _directoryLoadCts?.Dispose();
+        _viewerLoadCts?.Dispose();
+
+        foreach (var image in Images)
+        {
+            image.Dispose();
+        }
+
+        Images.Clear();
+        DirectoryTreeRoots.Clear();
+        SetViewerImage(null);
+    }
+}

@@ -1,0 +1,154 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Monkasa.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DesignWidth="1400"
+        d:DesignHeight="860"
+        MinWidth="1100"
+        MinHeight="700"
+        x:Class="Monkasa.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="Monkasa">
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Left" Command="{Binding PreviousImageCommand}" />
+        <KeyBinding Gesture="Right" Command="{Binding NextImageCommand}" />
+        <KeyBinding Gesture="Delete" Command="{Binding DeleteCurrentImageCommand}" />
+        <KeyBinding Gesture="Escape" Command="{Binding CloseViewerCommand}" />
+    </Window.KeyBindings>
+
+    <Grid RowDefinitions="Auto,*" ColumnDefinitions="280,*">
+        <Border Grid.Row="0"
+                Grid.ColumnSpan="2"
+                Padding="12"
+                Background="#F3F4F6"
+                BorderBrush="#D1D5DB"
+                BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Up" Command="{Binding GoParentCommand}" />
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="1"
+                           Margin="16,0,0,0"
+                           VerticalAlignment="Center"
+                           Text="{Binding CurrentDirectory}"
+                           TextTrimming="CharacterEllipsis" />
+
+                <TextBlock Grid.Column="2"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Right"
+                           Text="{Binding StatusText}" />
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1"
+                Grid.Column="0"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <TreeView Margin="4"
+                      Background="Transparent"
+                      BorderThickness="0"
+                      ItemsSource="{Binding DirectoryTreeRoots}"
+                      SelectedItem="{Binding SelectedDirectoryNode, Mode=TwoWay}"
+                      PointerPressed="OnDirectoryTreePointerPressed">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                        <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}" />
+                    </Style>
+                </TreeView.Styles>
+
+                <TreeView.ItemTemplate>
+                    <TreeDataTemplate x:DataType="vm:DirectoryTreeNodeViewModel"
+                                      ItemsSource="{Binding Children}">
+                        <StackPanel IsVisible="{Binding IsVisible}"
+                                    Margin="2,3"
+                                    Orientation="Horizontal">
+                            <StackPanel.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Delete Folder"
+                                              Command="{ReflectionBinding DataContext.DeleteDirectoryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding .}" />
+                                </ContextMenu>
+                            </StackPanel.ContextMenu>
+                            <TextBlock Margin="0,0,6,0" Text="{Binding FolderIcon}" />
+                            <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+            </TreeView>
+        </Border>
+
+        <Border Grid.Row="1"
+                Grid.Column="1"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <ListBox Margin="8"
+                     BorderThickness="0"
+                     ItemsSource="{Binding Images}"
+                     SelectedItem="{Binding SelectedImage, Mode=TwoWay}"
+                     PointerPressed="OnImageListPointerPressed"
+                     DoubleTapped="OnImageListDoubleTapped">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ImageItemViewModel">
+                        <Border Width="170"
+                                Height="160"
+                                Margin="6"
+                                Padding="0"
+                                BorderBrush="#D1D5DB"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                ClipToBounds="True"
+                                Background="#F3F4F6">
+                            <Border.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Delete Image"
+                                              Command="{ReflectionBinding DataContext.DeleteImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding .}" />
+                                </ContextMenu>
+                            </Border.ContextMenu>
+                            <Image Source="{Binding Thumbnail}"
+                                   Stretch="UniformToFill" />
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+
+        <Border Grid.RowSpan="2"
+                Grid.ColumnSpan="2"
+                Background="#E6000000"
+                IsVisible="{Binding IsViewerOpen}"
+                PointerPressed="OnViewerOverlayPressed">
+            <Grid Margin="20" RowDefinitions="Auto,*">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock FontSize="16"
+                               FontWeight="SemiBold"
+                               Foreground="White"
+                               Text="{Binding SelectedImageName}"
+                               TextTrimming="CharacterEllipsis" />
+
+                    <Button Grid.Column="1"
+                            Content="Close"
+                            Command="{Binding CloseViewerCommand}" />
+                </Grid>
+
+                <Image Grid.Row="1"
+                       Margin="0,16"
+                       Source="{Binding ViewerImage}"
+                       Stretch="Uniform"
+                       PointerPressed="OnViewerImagePressed" />
+            </Grid>
+        </Border>
+    </Grid>
+
+</Window>
