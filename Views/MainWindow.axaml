@@ -7,8 +7,8 @@
         mc:Ignorable="d"
         d:DesignWidth="1400"
         d:DesignHeight="860"
-        MinWidth="1100"
-        MinHeight="700"
+        Width="1080"
+        Height="720"
         x:Class="Monkasa.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Icon="/Resources/monkasa.ico"
@@ -24,8 +24,8 @@
         <Border Grid.Row="0"
                 Grid.ColumnSpan="3"
                 Padding="12"
-                Background="#F3F4F6"
-                BorderBrush="#D1D5DB"
+                Background="{DynamicResource LayerAltBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderLowBrush}"
                 BorderThickness="0,0,0,1">
             <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -61,7 +61,7 @@
 
         <Border Grid.Row="1"
                 Grid.Column="0"
-                BorderBrush="#E5E7EB"
+                BorderBrush="{DynamicResource BorderLowBrush}"
                 BorderThickness="0,0,1,0">
             <TreeView Margin="4"
                       Background="Transparent"
@@ -111,11 +111,11 @@
                       VerticalAlignment="Stretch"
                       ResizeDirection="Columns"
                       ResizeBehavior="PreviousAndNext"
-                      Background="#E5E7EB" />
+                      Background="{DynamicResource BorderLowBrush}" />
 
         <Border Grid.Row="1"
                 Grid.Column="2"
-                BorderBrush="#E5E7EB"
+                BorderBrush="{DynamicResource BorderLowBrush}"
                 BorderThickness="0,0,1,0">
             <ListBox Margin="2"
                      BorderThickness="0"
@@ -143,11 +143,10 @@
                                 Height="160"
                                 Margin="1"
                                 Padding="0"
-                                BorderBrush="#D1D5DB"
+                                BorderBrush="{DynamicResource BorderLowBrush}"
                                 BorderThickness="1"
                                 CornerRadius="3"
-                                ClipToBounds="True"
-                                Background="#F3F4F6">
+                                ClipToBounds="True">
                             <Image Source="{Binding Thumbnail}"
                                    Stretch="UniformToFill" />
                         </Border>
