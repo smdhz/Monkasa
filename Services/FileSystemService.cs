@@ -49,6 +49,7 @@ public sealed class FileSystemService : IDisposable
                     var name = Path.GetFileName(directory);
                     return !name.StartsWith(".", StringComparison.Ordinal);
                 })
+                .Where(ShouldIncludeDirectoryInTree)
                 .OrderBy(static directory => directory, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -59,6 +60,37 @@ public sealed class FileSystemService : IDisposable
         {
             _logger.LogWarning(ex, "Unable to enumerate directories under {Path}", path);
             return [];
+        }
+    }
+
+    private bool ShouldIncludeDirectoryInTree(string path)
+    {
+        try
+        {
+            var hasSubdirectories = Directory
+                .EnumerateDirectories(path)
+                .Any(static child =>
+                {
+                    var name = Path.GetFileName(child);
+                    return !name.StartsWith(".", StringComparison.Ordinal);
+                });
+
+            if (hasSubdirectories)
+            {
+                return true;
+            }
+
+            return Directory
+                .EnumerateFiles(path)
+                .Any(static file => SupportedExtensions.Contains(Path.GetExtension(file)));
+        }
+        catch (Exception ex) when (
+            ex is UnauthorizedAccessException
+            or IOException
+            or DirectoryNotFoundException)
+        {
+            _logger.LogDebug(ex, "Unable to evaluate directory tree visibility for {Path}", path);
+            return false;
         }
     }
 

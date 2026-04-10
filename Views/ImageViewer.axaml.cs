@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -47,6 +48,11 @@ public partial class ImageViewer : UserControl
 
     private void OnViewerOverlayPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (IsFromButtonElement(e.Source))
+        {
+            return;
+        }
+
         if (IsFromImageElement(e.Source))
         {
             return;
@@ -80,6 +86,18 @@ public partial class ImageViewer : UserControl
         }
 
         return false;
+    }
+
+    private static bool IsFromButtonElement(object? source)
+    {
+        if (source is not Visual visual)
+        {
+            return false;
+        }
+
+        return visual
+            .GetSelfAndVisualAncestors()
+            .Any(static ancestor => ancestor is Button);
     }
 
     private void OnViewerViewportSizeChanged(object? sender, SizeChangedEventArgs e)

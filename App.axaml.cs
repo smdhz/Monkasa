@@ -3,7 +3,6 @@ using Avalonia.Controls.ApplicationLifetimes;
 using System;
 using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
-using Monkasa.ViewModels;
 using Monkasa.Views;
 
 namespace Monkasa;
@@ -32,11 +31,6 @@ public partial class App : Application
         {
             var mainWindow = _services?.GetService<MainWindow>() ?? new MainWindow();
             desktop.MainWindow = mainWindow;
-
-            if (mainWindow.DataContext is MainWindowViewModel mainWindowViewModel)
-            {
-                _ = mainWindowViewModel.InitializeAsync();
-            }
         }
 
         base.OnFrameworkInitializationCompleted();

@@ -130,6 +130,14 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         _initialized = true;
+        try
+        {
+            await _cacheStore.EnsureSchemaAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to ensure local cache schema at startup");
+        }
 
         var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrWhiteSpace(homeDirectory) || !Directory.Exists(homeDirectory))
@@ -148,26 +156,14 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             await PersistRootDirectoriesAsync();
         }
 
-        foreach (var rootNode in DirectoryTreeRoots)
-        {
-            EnsureNodeChildren(rootNode);
-        }
-        ExpandPreferredRootNodeOnStartup();
-
-        if (TrySelectNodeByPath(initialDirectory))
-        {
-            if (SelectedDirectoryNode is { } selectedNode)
-            {
-                EnsureNodeChildren(selectedNode);
-                PreloadOneMoreFolderLevel(selectedNode);
-            }
-        }
-        else if (DirectoryTreeRoots.FirstOrDefault() is { } firstRootNode)
+        var selectedInitialNode = TrySelectNodeByPath(initialDirectory);
+        if (!selectedInitialNode && DirectoryTreeRoots.FirstOrDefault() is { } firstRootNode)
         {
             SelectDirectoryNode(firstRootNode);
         }
 
-        await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: true);
+        _ = RefreshOtherRootsAsync(initialDirectory);
+        await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: !selectedInitialNode);
     }
 
     [RelayCommand]
@@ -235,8 +231,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        EnsureNodeChildren(value);
-        PreloadOneMoreFolderLevel(value);
+        _ = EnsureNodeChildrenWithOneLevelPreloadAsync(value);
 
         if (PathsEqual(value.FullPath, CurrentDirectory))
         {
@@ -300,7 +295,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             await _cacheStore.RemoveMissingThumbnailsInDirectoryAsync(fullPath, cancellationToken);
-            var imageFiles = SortImageFiles(_fileSystemService.GetImages(fullPath));
+            var imageFiles = await Task.Run(
+                () => SortImageFiles(_fileSystemService.GetImages(fullPath)),
+                cancellationToken);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -863,12 +860,10 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             path,
             DirectoryTreeNodeViewModel.GetDisplayName(path),
             parent,
-            EnsureNodeChildren);
+            OnNodeExpandRequested);
 
-        if (HasSubdirectories(path))
-        {
-            node.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(node));
-        }
+        // Use lazy loading to avoid blocking the UI thread while building the tree.
+        node.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(node));
 
         return node;
     }
@@ -889,6 +884,72 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         node.ChildrenLoaded = true;
+    }
+
+    private void OnNodeExpandRequested(DirectoryTreeNodeViewModel node)
+    {
+        _ = EnsureNodeChildrenAsync(node);
+    }
+
+    private async Task EnsureNodeChildrenAsync(DirectoryTreeNodeViewModel node)
+    {
+        if (node.IsPlaceholder || node.ChildrenLoaded)
+        {
+            return;
+        }
+
+        string[] childPaths;
+        try
+        {
+            childPaths = await Task.Run(() => _fileSystemService.GetDirectories(node.FullPath).ToArray());
+        }
+        catch
+        {
+            childPaths = [];
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (node.IsPlaceholder || node.ChildrenLoaded)
+            {
+                return;
+            }
+
+            node.Children.Clear();
+            foreach (var childPath in childPaths)
+            {
+                node.Children.Add(CreateDirectoryNode(childPath, node));
+            }
+
+            node.ChildrenLoaded = true;
+        }, DispatcherPriority.Background);
+    }
+
+    private async Task EnsureNodeChildrenWithOneLevelPreloadAsync(DirectoryTreeNodeViewModel node)
+    {
+        await EnsureNodeChildrenAsync(node);
+
+        var children = node.Children.Where(child => !child.IsPlaceholder).ToArray();
+        foreach (var child in children)
+        {
+            await EnsureNodeChildrenAsync(child);
+        }
+    }
+
+    private async Task RefreshOtherRootsAsync(string currentDirectory)
+    {
+        var normalizedCurrentDirectory = NormalizePath(currentDirectory);
+        var roots = DirectoryTreeRoots.Where(rootNode => !rootNode.IsPlaceholder).ToArray();
+
+        foreach (var root in roots)
+        {
+            if (!IsSameOrChildPath(root.FullPath, normalizedCurrentDirectory))
+            {
+                await EnsureNodeChildrenAsync(root);
+            }
+
+            await Task.Delay(1);
+        }
     }
 
     private bool TrySelectNodeByPath(string path)

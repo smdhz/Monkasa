@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Threading;
 using Avalonia;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,9 +16,6 @@ sealed class Program
     public static void Main(string[] args)
     {
         using var host = CreateHostBuilder(args).Build();
-
-        var cacheStore = host.Services.GetRequiredService<DbStorageService>();
-        cacheStore.EnsureSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
 
         host.Start();
 

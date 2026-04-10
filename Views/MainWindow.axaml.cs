@@ -14,9 +14,12 @@ namespace Monkasa.Views;
 
 public partial class MainWindow : Window
 {
+    private bool _isInitialized;
+
     public MainWindow()
     {
         InitializeComponent();
+        Opened += OnOpened;
     }
 
     public MainWindow(MainWindowViewModel viewModel)
@@ -83,6 +86,17 @@ public partial class MainWindow : Window
         viewModel.CopyTextAsync = CopyTextToClipboardAsync;
         viewModel.PickDirectoryAsync = PickDirectoryAsync;
         viewModel.PromptDirectoryInputAsync = ShowDirectoryInputDialogAsync;
+    }
+
+    private void OnOpened(object? sender, EventArgs e)
+    {
+        if (_isInitialized || DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        _isInitialized = true;
+        _ = viewModel.InitializeAsync();
     }
 
     private async Task<bool> ShowDeleteConfirmDialogAsync(string title, string message)
