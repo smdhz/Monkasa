@@ -10,7 +10,7 @@
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock FontSize="16"
                            FontWeight="SemiBold"
-                           Foreground="White"
+                           Foreground="#FFF8FBFF"
                            Text="{Binding SelectedImageName}"
                            TextTrimming="CharacterEllipsis" />
 
@@ -18,8 +18,12 @@
                             Orientation="Horizontal"
                             Spacing="8">
                     <Button Content="&lt;"
+                            Foreground="#FF1D2B35"
+                            Background="#E6F4F8FB"
                             Command="{Binding PreviousImageCommand}" />
                     <Button Content="&gt;"
+                            Foreground="#FF1D2B35"
+                            Background="#E6F4F8FB"
                             Command="{Binding NextImageCommand}" />
                 </StackPanel>
             </Grid>
