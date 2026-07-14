@@ -4,10 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.Logging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Monkasa.Services;
 
@@ -116,26 +113,9 @@ public sealed class ThumbnailService
 
         try
         {
-            await using var fileStream = File.OpenRead(filePath);
-            using var image = await Image.LoadAsync(fileStream, cancellationToken);
-
-            image.Mutate(context =>
-            {
-                context.AutoOrient();
-                context.Resize(new ResizeOptions
-                {
-                    Mode = ResizeMode.Max,
-                    Size = new Size(targetWidth, targetHeight),
-                });
-            });
-
-            await using var outputStream = new MemoryStream();
-            await image.SaveAsJpegAsync(outputStream, new JpegEncoder
-            {
-                Quality = quality,
-            }, cancellationToken);
-
-            return outputStream.ToArray();
+            return await Task.Run(
+                () => CreateJpegAsync(filePath, targetWidth, targetHeight, quality, resizeToFit: true, cancellationToken),
+                cancellationToken);
         }
         catch (Exception)
         {
@@ -163,19 +143,13 @@ public sealed class ThumbnailService
         string filePath,
         CancellationToken cancellationToken)
     {
-        await using var fileStream = File.OpenRead(filePath);
-        var imageInfo = await Image.IdentifyAsync(fileStream, cancellationToken);
-        if (imageInfo?.Metadata.ExifProfile is not ExifProfile exifProfile)
+        return await Task.Run(() =>
         {
-            return false;
-        }
-
-        if (!exifProfile.TryGetValue(ExifTag.Orientation, out IExifValue<ushort>? orientationTag))
-        {
-            return false;
-        }
-
-        return orientationTag.Value != 1;
+            cancellationToken.ThrowIfCancellationRequested();
+            using var stream = File.OpenRead(filePath);
+            using var codec = SKCodec.Create(stream);
+            return codec is not null && codec.EncodedOrigin != SKEncodedOrigin.TopLeft;
+        }, cancellationToken);
     }
 
     private static async Task<byte[]?> CreateAutoOrientedJpegAsync(
@@ -185,22 +159,126 @@ public sealed class ThumbnailService
     {
         try
         {
-            await using var fileStream = File.OpenRead(filePath);
-            using var image = await Image.LoadAsync(fileStream, cancellationToken);
-
-            image.Mutate(context => context.AutoOrient());
-
-            await using var outputStream = new MemoryStream();
-            await image.SaveAsJpegAsync(outputStream, new JpegEncoder
-            {
-                Quality = quality,
-            }, cancellationToken);
-
-            return outputStream.ToArray();
+            return await Task.Run(
+                () => CreateJpegAsync(filePath, targetWidth: 0, targetHeight: 0, quality, resizeToFit: false, cancellationToken),
+                cancellationToken);
         }
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    private static byte[]? CreateJpegAsync(
+        string filePath,
+        int targetWidth,
+        int targetHeight,
+        int quality,
+        bool resizeToFit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var stream = File.OpenRead(filePath);
+        using var codec = SKCodec.Create(stream);
+        if (codec is null)
+        {
+            return null;
+        }
+
+        using var source = SKBitmap.Decode(codec);
+        if (source is null)
+        {
+            return null;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var oriented = DrawOrientedBitmap(source, codec.EncodedOrigin, targetWidth, targetHeight, resizeToFit);
+        using var image = SKImage.FromBitmap(oriented);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+        return data?.ToArray();
+    }
+
+    private static SKBitmap DrawOrientedBitmap(
+        SKBitmap source,
+        SKEncodedOrigin origin,
+        int targetWidth,
+        int targetHeight,
+        bool resizeToFit)
+    {
+        var swapsAxes = origin is SKEncodedOrigin.LeftTop
+            or SKEncodedOrigin.RightTop
+            or SKEncodedOrigin.RightBottom
+            or SKEncodedOrigin.LeftBottom;
+        var orientedWidth = swapsAxes ? source.Height : source.Width;
+        var orientedHeight = swapsAxes ? source.Width : source.Height;
+
+        var scale = 1f;
+        if (resizeToFit)
+        {
+            scale = Math.Min((float)targetWidth / orientedWidth, (float)targetHeight / orientedHeight);
+            scale = Math.Min(1f, Math.Max(0.01f, scale));
+        }
+
+        var outputWidth = Math.Max(1, (int)Math.Round(orientedWidth * scale));
+        var outputHeight = Math.Max(1, (int)Math.Round(orientedHeight * scale));
+        var output = new SKBitmap(outputWidth, outputHeight, source.ColorType, source.AlphaType);
+
+        using var canvas = new SKCanvas(output);
+        canvas.Clear(SKColors.Transparent);
+        canvas.Scale(scale);
+        ApplyOrientationTransform(canvas, origin, source.Width, source.Height);
+
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+        };
+
+        using var sourceImage = SKImage.FromBitmap(source);
+        canvas.DrawImage(
+            sourceImage,
+            0,
+            0,
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear),
+            paint);
+        canvas.Flush();
+        return output;
+    }
+
+    private static void ApplyOrientationTransform(SKCanvas canvas, SKEncodedOrigin origin, int width, int height)
+    {
+        switch (origin)
+        {
+            case SKEncodedOrigin.TopRight:
+                canvas.Translate(width, 0);
+                canvas.Scale(-1, 1);
+                break;
+            case SKEncodedOrigin.BottomRight:
+                canvas.Translate(width, height);
+                canvas.RotateDegrees(180);
+                break;
+            case SKEncodedOrigin.BottomLeft:
+                canvas.Translate(0, height);
+                canvas.Scale(1, -1);
+                break;
+            case SKEncodedOrigin.LeftTop:
+                canvas.RotateDegrees(90);
+                canvas.Scale(1, -1);
+                break;
+            case SKEncodedOrigin.RightTop:
+                canvas.Translate(height, 0);
+                canvas.RotateDegrees(90);
+                break;
+            case SKEncodedOrigin.RightBottom:
+                canvas.Translate(height, width);
+                canvas.RotateDegrees(90);
+                canvas.Scale(-1, 1);
+                break;
+            case SKEncodedOrigin.LeftBottom:
+                canvas.Translate(0, width);
+                canvas.RotateDegrees(270);
+                break;
         }
     }
 

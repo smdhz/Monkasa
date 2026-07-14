@@ -25,6 +25,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly FileSystemService _fileSystemService;
     private readonly DbStorageService _cacheStore;
     private readonly ThumbnailService _thumbnailService;
+    private readonly AppLogService _appLogService;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
@@ -48,11 +49,13 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         FileSystemService fileSystemService,
         DbStorageService cacheStore,
         ThumbnailService thumbnailService,
+        AppLogService appLogService,
         ILogger<MainWindowViewModel> logger)
     {
         _fileSystemService = fileSystemService;
         _cacheStore = cacheStore;
         _thumbnailService = thumbnailService;
+        _appLogService = appLogService;
         _logger = logger;
         _directoryRefreshCallbackAsync = async () =>
         {
@@ -395,6 +398,21 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Expected when user navigates to another folder while thumbnails are loading.
+        }
+    }
+
+    [RelayCommand]
+    private void OpenLogFile()
+    {
+        try
+        {
+            _appLogService.OpenLogFile();
+            StatusText = $"Opened log: {_appLogService.LogFilePath}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to open log file {Path}", _appLogService.LogFilePath);
+            StatusText = $"Unable to open log: {_appLogService.LogFilePath}";
         }
     }
 

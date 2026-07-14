@@ -37,6 +37,14 @@
                             Content="🗂️"
                             ToolTip.Tip="Input Folder Path"
                             Command="{Binding PromptOpenDirectoryCommand}" />
+                    <Button Width="34"
+                            Height="30"
+                            Padding="0"
+                            HorizontalContentAlignment="Center"
+                            VerticalContentAlignment="Center"
+                            Content="📔"
+                            ToolTip.Tip="Open Log File"
+                            Command="{Binding OpenLogFileCommand}" />
                     <ComboBox Width="120"
                               Height="30"
                               SelectedIndex="{Binding SortModeIndex, Mode=TwoWay}"
