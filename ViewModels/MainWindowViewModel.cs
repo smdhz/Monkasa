@@ -345,7 +345,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         var options = new ParallelOptions
         {
             CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            // Image decoding is both CPU- and memory-heavy. Keeping a small bound also
+            // avoids large bursts when opening folders with many high-resolution files.
+            MaxDegreeOfParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount)),
         };
 
         try

@@ -113,8 +113,9 @@ public sealed class ThumbnailService
 
         try
         {
+            var sourceBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
             return await Task.Run(
-                () => CreateJpegAsync(filePath, targetWidth, targetHeight, quality, resizeToFit: true, cancellationToken),
+                () => CreateJpeg(sourceBytes, targetWidth, targetHeight, quality, resizeToFit: true, cancellationToken),
                 cancellationToken);
         }
         catch (Exception)
@@ -127,40 +128,41 @@ public sealed class ThumbnailService
         string filePath,
         CancellationToken cancellationToken)
     {
-        var requiresAutoOrientation = await RequiresAutoOrientationAsync(filePath, cancellationToken);
+        var sourceBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+        var requiresAutoOrientation = await RequiresAutoOrientationAsync(sourceBytes, cancellationToken);
         if (!requiresAutoOrientation)
         {
-            return await File.ReadAllBytesAsync(filePath, cancellationToken);
+            return sourceBytes;
         }
 
         return await CreateAutoOrientedJpegAsync(
-            filePath,
+            sourceBytes,
             quality: 95,
             cancellationToken);
     }
 
     private static async Task<bool> RequiresAutoOrientationAsync(
-        string filePath,
+        byte[] sourceBytes,
         CancellationToken cancellationToken)
     {
         return await Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var stream = File.OpenRead(filePath);
-            using var codec = SKCodec.Create(stream);
+            using var data = SKData.CreateCopy(sourceBytes);
+            using var codec = SKCodec.Create(data);
             return codec is not null && codec.EncodedOrigin != SKEncodedOrigin.TopLeft;
         }, cancellationToken);
     }
 
     private static async Task<byte[]?> CreateAutoOrientedJpegAsync(
-        string filePath,
+        byte[] sourceBytes,
         int quality,
         CancellationToken cancellationToken)
     {
         try
         {
             return await Task.Run(
-                () => CreateJpegAsync(filePath, targetWidth: 0, targetHeight: 0, quality, resizeToFit: false, cancellationToken),
+                () => CreateJpeg(sourceBytes, targetWidth: 0, targetHeight: 0, quality, resizeToFit: false, cancellationToken),
                 cancellationToken);
         }
         catch (Exception)
@@ -169,8 +171,8 @@ public sealed class ThumbnailService
         }
     }
 
-    private static byte[]? CreateJpegAsync(
-        string filePath,
+    private static byte[]? CreateJpeg(
+        byte[] sourceBytes,
         int targetWidth,
         int targetHeight,
         int quality,
@@ -179,8 +181,11 @@ public sealed class ThumbnailService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var stream = File.OpenRead(filePath);
-        using var codec = SKCodec.Create(stream);
+        // Do not pass a FileStream to SKCodec. SkiaSharp services Stream reads through
+        // an unmanaged callback; an IOException in that callback crosses the native
+        // boundary and causes .NET to terminate the process before our catch can run.
+        using var sourceData = SKData.CreateCopy(sourceBytes);
+        using var codec = SKCodec.Create(sourceData);
         if (codec is null)
         {
             return null;
