@@ -11,6 +11,10 @@ namespace Monkasa.Services;
 
 public sealed class DbStorageService
 {
+    private static readonly TimeSpan CleanupInitialDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CleanupBatchDelay = TimeSpan.FromMilliseconds(500);
+    private const int CleanupBatchSize = 25;
+
     private readonly IDbContextFactory<MonkasaDbContext> _dbContextFactory;
     private readonly ILogger<DbStorageService> _logger;
 
@@ -20,6 +24,32 @@ public sealed class DbStorageService
     {
         _dbContextFactory = dbContextFactory;
         _logger = logger;
+    }
+
+    public async Task RunBackgroundCleanupAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(CleanupInitialDelay, stoppingToken);
+
+            _logger.LogInformation("Starting background thumbnail cache cleanup");
+            var deletedCount = await RemoveMissingThumbnailsInBatchesAsync(
+                CleanupBatchSize,
+                CleanupBatchDelay,
+                stoppingToken);
+
+            _logger.LogInformation(
+                "Background thumbnail cache cleanup finished; deleted {Count} stale entries",
+                deletedCount);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Background thumbnail cache cleanup was cancelled");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Background thumbnail cache cleanup failed");
+        }
     }
 
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken)
@@ -198,6 +228,52 @@ public sealed class DbStorageService
         {
             _logger.LogWarning(ex, "Unable to cleanup missing thumbnails for {Directory}", directoryPath);
         }
+    }
+
+    private async Task<int> RemoveMissingThumbnailsInBatchesAsync(
+        int batchSize,
+        TimeSpan delayBetweenBatches,
+        CancellationToken cancellationToken)
+    {
+        if (batchSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        }
+
+        await using var readDb = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var candidatePaths = await readDb.ThumbnailCache
+            .AsNoTracking()
+            .Select(x => x.FilePath)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync(cancellationToken);
+
+        var deletedCount = 0;
+        foreach (var batch in candidatePaths.Chunk(batchSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Check paths serially. In particular, do not fan out filesystem calls to
+            // removable volumes or cloud-storage providers during background cleanup.
+            var missingFilePaths = batch
+                .Where(path => !File.Exists(path))
+                .ToArray();
+
+            if (missingFilePaths.Length > 0)
+            {
+                await using var writeDb = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                deletedCount += await writeDb.ThumbnailCache
+                    .Where(x => missingFilePaths.Contains(x.FilePath))
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            if (delayBetweenBatches > TimeSpan.Zero)
+            {
+                await Task.Delay(delayBetweenBatches, cancellationToken);
+            }
+        }
+
+        return deletedCount;
     }
 
     public static string GetDatabasePath()

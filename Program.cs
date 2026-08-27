@@ -29,6 +29,8 @@ sealed class Program
         {
             host.Start();
             logger.LogInformation("Monkasa started. Log file: {LogFile}", AppLogService.GetLogFilePath());
+            _ = host.Services.GetRequiredService<DbStorageService>().RunBackgroundCleanupAsync(
+                host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping);
             BuildAvaloniaApp(host.Services).StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
