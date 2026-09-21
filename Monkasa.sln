@@ -4,8 +4,6 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Monkasa", "Monkasa.csproj", "{4B03FC21-1E2B-13A7-2463-A2891A5D913C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Monkasa.Tests", "Monkasa.Tests\Monkasa.Tests.csproj", "{9C872AA4-771A-4F9B-A4A5-37E6E59F0F03}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

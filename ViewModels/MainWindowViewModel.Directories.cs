@@ -17,7 +17,7 @@ public partial class MainWindowViewModel
     private async Task CopyDirectoryPathAsync(DirectoryTreeNodeViewModel? directoryNode)
     {
         var target = directoryNode ?? SelectedDirectoryNode;
-        if (target is null || target.IsPlaceholder || CopyTextAsync is null)
+        if (target is null || CopyTextAsync is null)
         {
             return;
         }
@@ -37,7 +37,7 @@ public partial class MainWindowViewModel
             return;
         }
 
-        if (!Directory.Exists(normalizedPath))
+        if (!await Task.Run(() => Directory.Exists(normalizedPath)))
         {
             SelectedImage = null;
             StatusText = $"Directory not found: {normalizedPath}";
@@ -55,14 +55,15 @@ public partial class MainWindowViewModel
 
         if (addAsRoot)
         {
+            DirectoryTreeNodeViewModel? rootNode = null;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var rootNode = AddRootDirectoryNode(normalizedPath);
-                EnsureNodeChildren(rootNode);
-                PreloadOneMoreFolderLevel(rootNode);
+                rootNode = AddRootDirectoryNode(normalizedPath);
                 rootNode.IsExpanded = true;
                 SelectDirectoryNode(rootNode);
             });
+
+            await EnsureNodeChildrenAsync(rootNode!);
 
             await PersistRootDirectoriesAsync();
         }
@@ -126,13 +127,14 @@ public partial class MainWindowViewModel
 
         var normalizedPath = NormalizePath(target!.FullPath);
 
+        DirectoryTreeNodeViewModel? rootNode = null;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            var rootNode = AddRootDirectoryNode(normalizedPath);
-            EnsureNodeChildren(rootNode);
-            PreloadOneMoreFolderLevel(rootNode);
+            rootNode = AddRootDirectoryNode(normalizedPath);
             rootNode.IsExpanded = true;
         });
+
+        await EnsureNodeChildrenAsync(rootNode!);
 
         await PersistRootDirectoriesAsync();
         StatusText = $"Added favorite: {target.DisplayName}";
@@ -168,20 +170,20 @@ public partial class MainWindowViewModel
                 nextDirectory = DirectoryTreeRoots.FirstOrDefault()?.FullPath ?? _homeDirectoryPath;
             }
 
-            if (DirectoryTreeRoots.Count > 0)
-            {
-                TrySelectNodeByPath(nextDirectory);
-            }
-
             OnPropertyChanged(nameof(CanRemoveSelectedRootDirectory));
             OnPropertyChanged(nameof(CanAddSelectedDirectoryAsRoot));
             RemoveRootDirectoryCommand.NotifyCanExecuteChanged();
             AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
         });
 
+        if (DirectoryTreeRoots.Count > 0)
+        {
+            await TrySelectNodeByPathAsync(nextDirectory);
+        }
+
         await PersistRootDirectoriesAsync();
 
-        if (Directory.Exists(nextDirectory))
+        if (await Task.Run(() => Directory.Exists(nextDirectory)))
         {
             await LoadDirectoryAsync(nextDirectory, synchronizeTreeSelection: true);
         }
@@ -214,7 +216,7 @@ public partial class MainWindowViewModel
 
         try
         {
-            _fileSystemService.DeleteDirectory(targetPath, recursive: true);
+            await Task.Run(() => _fileSystemService.DeleteDirectory(targetPath, recursive: true));
         }
         catch (Exception ex)
         {
@@ -234,12 +236,6 @@ public partial class MainWindowViewModel
             {
                 target.Parent.Children.Remove(target);
                 target.Parent.ChildrenLoaded = true;
-
-                if (target.Parent.Children.Count == 0)
-                {
-                    target.Parent.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(target.Parent));
-                    target.Parent.ChildrenLoaded = false;
-                }
             }
 
             OnPropertyChanged(nameof(CanRemoveSelectedRootDirectory));
@@ -252,12 +248,12 @@ public partial class MainWindowViewModel
 
         await PersistRootDirectoriesAsync();
 
-        if (!Directory.Exists(fallbackDirectory) || !IsPathCoveredByRoots(fallbackDirectory))
+        if (!await Task.Run(() => Directory.Exists(fallbackDirectory)) || !IsPathCoveredByRoots(fallbackDirectory))
         {
             fallbackDirectory = DirectoryTreeRoots.FirstOrDefault()?.FullPath ?? _homeDirectoryPath;
         }
 
-        if (Directory.Exists(fallbackDirectory))
+        if (await Task.Run(() => Directory.Exists(fallbackDirectory)))
         {
             await LoadDirectoryAsync(fallbackDirectory, synchronizeTreeSelection: true);
             StatusText = $"Deleted folder: {target.DisplayName}";
@@ -301,7 +297,7 @@ public partial class MainWindowViewModel
         for (var index = 0; index < DirectoryTreeRoots.Count; index++)
         {
             var existingRoot = DirectoryTreeRoots[index];
-            if (!existingRoot.IsPlaceholder && PathsEqual(existingRoot.FullPath, _homeDirectoryPath))
+            if (PathsEqual(existingRoot.FullPath, _homeDirectoryPath))
             {
                 return index;
             }
@@ -312,34 +308,11 @@ public partial class MainWindowViewModel
 
     private DirectoryTreeNodeViewModel CreateDirectoryNode(string path, DirectoryTreeNodeViewModel? parent)
     {
-        var node = new DirectoryTreeNodeViewModel(
+        return new DirectoryTreeNodeViewModel(
             path,
             DirectoryTreeNodeViewModel.GetDisplayName(path),
             parent,
             OnNodeExpandRequested);
-
-        // Use lazy loading to avoid blocking the UI thread while building the tree.
-        node.Children.Add(DirectoryTreeNodeViewModel.CreatePlaceholder(node));
-
-        return node;
-    }
-
-    private void EnsureNodeChildren(DirectoryTreeNodeViewModel node)
-    {
-        if (node.IsPlaceholder || node.ChildrenLoaded)
-        {
-            return;
-        }
-
-        var children = _fileSystemService.GetDirectories(node.FullPath);
-
-        node.Children.Clear();
-        foreach (var childPath in children)
-        {
-            node.Children.Add(CreateDirectoryNode(childPath, node));
-        }
-
-        node.ChildrenLoaded = true;
     }
 
     private void OnNodeExpandRequested(DirectoryTreeNodeViewModel node)
@@ -349,30 +322,26 @@ public partial class MainWindowViewModel
 
     private async Task EnsureNodeChildrenAsync(DirectoryTreeNodeViewModel node)
     {
-        if (node.IsPlaceholder || node.ChildrenLoaded)
+        if (node.ChildrenLoaded)
         {
             return;
         }
 
-        string[] childPaths;
-        try
+        var result = await _fileSystemService.GetDirectoriesAsync(node.FullPath);
+        if (!result.IsComplete)
         {
-            childPaths = await Task.Run(() => _fileSystemService.GetDirectories(node.FullPath).ToArray());
-        }
-        catch
-        {
-            childPaths = [];
+            return;
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            if (node.IsPlaceholder || node.ChildrenLoaded)
+            if (node.ChildrenLoaded)
             {
                 return;
             }
 
             node.Children.Clear();
-            foreach (var childPath in childPaths)
+            foreach (var childPath in result.Directories)
             {
                 node.Children.Add(CreateDirectoryNode(childPath, node));
             }
@@ -381,34 +350,7 @@ public partial class MainWindowViewModel
         }, DispatcherPriority.Background);
     }
 
-    private async Task EnsureNodeChildrenWithOneLevelPreloadAsync(DirectoryTreeNodeViewModel node)
-    {
-        await EnsureNodeChildrenAsync(node);
-
-        var children = node.Children.Where(child => !child.IsPlaceholder).ToArray();
-        foreach (var child in children)
-        {
-            await EnsureNodeChildrenAsync(child);
-        }
-    }
-
-    private async Task RefreshOtherRootsAsync(string currentDirectory)
-    {
-        var normalizedCurrentDirectory = NormalizePath(currentDirectory);
-        var roots = DirectoryTreeRoots.Where(rootNode => !rootNode.IsPlaceholder).ToArray();
-
-        foreach (var root in roots)
-        {
-            if (!IsSameOrChildPath(root.FullPath, normalizedCurrentDirectory))
-            {
-                await EnsureNodeChildrenAsync(root);
-            }
-
-            await Task.Delay(1);
-        }
-    }
-
-    private bool TrySelectNodeByPath(string path)
+    private async Task<bool> TrySelectNodeByPathAsync(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -417,30 +359,28 @@ public partial class MainWindowViewModel
 
         var targetPath = NormalizePath(path);
         var firstMatchingRoot = DirectoryTreeRoots.FirstOrDefault(rootNode =>
-            !rootNode.IsPlaceholder && IsSameOrChildPath(rootNode.FullPath, targetPath));
+            IsSameOrChildPath(rootNode.FullPath, targetPath));
 
         if (firstMatchingRoot is null)
         {
             return false;
         }
 
-        var targetNode = ExpandToPath(firstMatchingRoot, targetPath);
+        var targetNode = await ExpandToPathAsync(firstMatchingRoot, targetPath);
         if (targetNode is null)
         {
             return false;
         }
 
+        await EnsureNodeChildrenAsync(targetNode);
         SelectDirectoryNode(targetNode);
         return true;
     }
 
-    private DirectoryTreeNodeViewModel? ExpandToPath(DirectoryTreeNodeViewModel startNode, string targetPath)
+    private async Task<DirectoryTreeNodeViewModel?> ExpandToPathAsync(
+        DirectoryTreeNodeViewModel startNode,
+        string targetPath)
     {
-        if (startNode.IsPlaceholder)
-        {
-            return null;
-        }
-
         var currentNode = startNode;
         while (true)
         {
@@ -455,17 +395,12 @@ public partial class MainWindowViewModel
                 return currentNode;
             }
 
+            await EnsureNodeChildrenAsync(currentNode);
             currentNode.IsExpanded = true;
-            EnsureNodeChildren(currentNode);
 
             DirectoryTreeNodeViewModel? nextNode = null;
             foreach (var child in currentNode.Children)
             {
-                if (child.IsPlaceholder)
-                {
-                    continue;
-                }
-
                 if (IsSameOrChildPath(child.FullPath, targetPath))
                 {
                     nextNode = child;
@@ -539,7 +474,7 @@ public partial class MainWindowViewModel
 
     private bool CanRemoveRootDirectory(DirectoryTreeNodeViewModel? node)
     {
-        if (node is null || node.IsPlaceholder)
+        if (node is null)
         {
             return false;
         }
@@ -559,7 +494,7 @@ public partial class MainWindowViewModel
 
     private bool CanDeleteDirectory(DirectoryTreeNodeViewModel? node)
     {
-        if (node is null || node.IsPlaceholder)
+        if (node is null)
         {
             return false;
         }
@@ -569,102 +504,18 @@ public partial class MainWindowViewModel
             return false;
         }
 
-        return Directory.Exists(node.FullPath);
+        return true;
     }
 
     private bool CanAddDirectoryAsRoot(DirectoryTreeNodeViewModel? node)
     {
-        if (node is null || node.IsPlaceholder)
-        {
-            return false;
-        }
-
-        if (!Directory.Exists(node.FullPath))
+        if (node is null)
         {
             return false;
         }
 
         var normalizedPath = NormalizePath(node.FullPath);
         return !_treeRootPaths.Any(existingRoot => PathsEqual(existingRoot, normalizedPath));
-    }
-
-    private void ExpandPreferredRootNodeOnStartup()
-    {
-        var favoriteRoots = DirectoryTreeRoots.Where(rootNode =>
-            !rootNode.IsPlaceholder &&
-            !PathsEqual(rootNode.FullPath, _homeDirectoryPath));
-
-        if (TryExpandRootNodeOnStartup(favoriteRoots))
-        {
-            return;
-        }
-
-        var homeRoot = DirectoryTreeRoots.FirstOrDefault(rootNode =>
-            !rootNode.IsPlaceholder &&
-            PathsEqual(rootNode.FullPath, _homeDirectoryPath));
-
-        if (homeRoot is not null)
-        {
-            ExpandRootNodeOnStartup(homeRoot);
-            return;
-        }
-
-        if (DirectoryTreeRoots.FirstOrDefault(rootNode => !rootNode.IsPlaceholder) is { } firstRoot)
-        {
-            ExpandRootNodeOnStartup(firstRoot);
-        }
-    }
-
-    private bool TryExpandRootNodeOnStartup(IEnumerable<DirectoryTreeNodeViewModel> candidates)
-    {
-        foreach (var candidate in candidates)
-        {
-            if (ExpandRootNodeOnStartup(candidate))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private bool ExpandRootNodeOnStartup(DirectoryTreeNodeViewModel node)
-    {
-        if (node.IsPlaceholder)
-        {
-            return false;
-        }
-
-        EnsureNodeChildren(node);
-        PreloadOneMoreFolderLevel(node);
-        node.IsExpanded = true;
-        return true;
-    }
-
-    private void PreloadOneMoreFolderLevel(DirectoryTreeNodeViewModel node)
-    {
-        foreach (var child in node.Children)
-        {
-            if (child.IsPlaceholder)
-            {
-                continue;
-            }
-
-            EnsureNodeChildren(child);
-        }
-    }
-
-    private bool HasSubdirectories(string path)
-    {
-        try
-        {
-            using var enumerator = _fileSystemService.GetDirectories(path).GetEnumerator();
-            return enumerator.MoveNext();
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private async Task<bool> ConfirmDeletionOrDefaultAsync(string title, string message)
@@ -685,7 +536,8 @@ public partial class MainWindowViewModel
                 LastOpenedDirectoryStateKey,
                 CancellationToken.None);
 
-            if (!string.IsNullOrWhiteSpace(savedDirectory) && Directory.Exists(savedDirectory))
+            if (!string.IsNullOrWhiteSpace(savedDirectory) &&
+                await Task.Run(() => Directory.Exists(savedDirectory)))
             {
                 return NormalizePath(savedDirectory);
             }
@@ -734,27 +586,32 @@ public partial class MainWindowViewModel
                 return [normalizedHome];
             }
 
-            var roots = new List<string>();
-            foreach (var candidate in candidates)
+            var roots = await Task.Run(() =>
             {
-                if (string.IsNullOrWhiteSpace(candidate) || !Directory.Exists(candidate))
+                var availableRoots = new List<string>();
+                foreach (var candidate in candidates)
                 {
-                    continue;
+                    if (string.IsNullOrWhiteSpace(candidate) || !Directory.Exists(candidate))
+                    {
+                        continue;
+                    }
+
+                    var normalizedCandidate = NormalizePath(candidate);
+                    if (PathsEqual(normalizedCandidate, normalizedHome))
+                    {
+                        continue;
+                    }
+
+                    if (availableRoots.Any(existing => PathsEqual(existing, normalizedCandidate)))
+                    {
+                        continue;
+                    }
+
+                    availableRoots.Add(normalizedCandidate);
                 }
 
-                var normalizedCandidate = NormalizePath(candidate);
-                if (PathsEqual(normalizedCandidate, normalizedHome))
-                {
-                    continue;
-                }
-
-                if (roots.Any(existing => PathsEqual(existing, normalizedCandidate)))
-                {
-                    continue;
-                }
-
-                roots.Add(normalizedCandidate);
-            }
+                return availableRoots;
+            });
 
             roots.Add(normalizedHome);
             return roots;
@@ -770,11 +627,13 @@ public partial class MainWindowViewModel
     {
         try
         {
-            var roots = _treeRootPaths
+            var rootCandidates = _treeRootPaths
                 .Where(path => !PathsEqual(path, _homeDirectoryPath))
+                .ToArray();
+            var roots = await Task.Run(() => rootCandidates
                 .Where(Directory.Exists)
                 .Distinct(StringComparerFromPathComparison())
-                .ToArray();
+                .ToArray());
 
             await _cacheStore.SaveStateValueAsync(
                 RootDirectoriesStateKey,

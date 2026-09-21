@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
@@ -74,7 +75,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.Source is StyledElement { DataContext: DirectoryTreeNodeViewModel node } && !node.IsPlaceholder)
+        if (e.Source is StyledElement { DataContext: DirectoryTreeNodeViewModel node })
         {
             viewModel.SelectedDirectoryNode = node;
         }
@@ -169,23 +170,28 @@ public partial class MainWindow : Window
 
     private async Task<string?> ShowDirectoryInputDialogAsync(string? initialPath)
     {
-        var dialog = new DirectoryInputDialog(
-            initialPath,
-            pickDirectoryAsync: PickDirectoryAsync,
-            isBrowseSupported: !OperatingSystem.IsMacOS())
+        IStorageFolder? suggestedStartLocation = null;
+        if (!string.IsNullOrWhiteSpace(initialPath) &&
+            await Task.Run(() => Directory.Exists(initialPath)))
         {
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-        };
+            suggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(initialPath);
+        }
 
-        return await dialog.ShowDialog<string?>(this);
+        return await PickDirectoryAsync(suggestedStartLocation);
     }
 
-    private async Task<string?> PickDirectoryAsync()
+    private Task<string?> PickDirectoryAsync()
+    {
+        return PickDirectoryAsync(suggestedStartLocation: null);
+    }
+
+    private async Task<string?> PickDirectoryAsync(IStorageFolder? suggestedStartLocation)
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Title = "Select Favorite Folder",
+            Title = "Open Folder",
             AllowMultiple = false,
+            SuggestedStartLocation = suggestedStartLocation,
         });
 
         var selectedFolder = folders.FirstOrDefault();

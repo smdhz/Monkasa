@@ -5,6 +5,9 @@ Monkasa 是一个仿造 Picasa 的轻量看图程序，提供目录树浏览、�
 ## 已有功能
 
 - 从用户主目录开始浏览，支持目录树展开、收起和收藏常用目录。
+- 使用各平台的原生目录选择对话框打开文件夹。
+- 目录树按需异步加载：只有打开某个目录时才读取它的直接子目录，不会为了过滤节点而提前进入每个子目录。
+- 相同路径的并发读取会合并为一次；无权限目录在本次运行期间不再重复访问，临时 I/O 和云盘错误会在冷却后才允许重试。
 - 按名称或修改时间排序图片。
 - 双击进入查看模式，使用 `←` / `→` 切换图片，使用 `Esc` 退出。
 - 支持查看器缩放和拖动。
@@ -21,7 +24,7 @@ Monkasa 以包含所需组件的自包含应用包发行，普通用户无需额
 - `ViewModels/MainWindowViewModel.Directories.cs`：目录树、收藏目录和路径状态。
 - `ViewModels/MainWindowViewModel.Gallery.cs`：图片集合、增量刷新、排序和缩略图加载。
 - `ViewModels/MainWindowViewModel.Viewer.cs`：查看器打开、关闭与导航。
-- `Services/FileSystemService.cs`：目录扫描和文件变化监听。
+- `Services/FileSystemService.cs`：后台目录读取、重复请求合并、失败冷却和文件变化监听。
 - `Services/ThumbnailService.cs`：缩略图和预览图生成。
 - `Services/DbStorageService.cs`：SQLite 缩略图缓存和应用状态。
 - `Services/ImageCatalogPlanner.cs`：可独立测试的图片差异计算与排序逻辑。
@@ -59,7 +62,6 @@ Monkasa 以包含所需组件的自包含应用包发行，普通用户无需额
 
 ### 5. 目录与图片管理
 
-- 目录树仅在用户展开时扫描，避免预先访问大量子目录。
 - 增加按文件名快速过滤、递归查看、按年月分组和星标/标签。
 - 根据各平台解码能力评估 HEIC、AVIF 等格式。
 

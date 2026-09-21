@@ -54,7 +54,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _directoryRefreshCallbackAsync = async () =>
         {
             var directoryToRefresh = CurrentDirectory;
-            if (string.IsNullOrWhiteSpace(directoryToRefresh) || !Directory.Exists(directoryToRefresh))
+            if (string.IsNullOrWhiteSpace(directoryToRefresh) ||
+                !await Task.Run(() => Directory.Exists(directoryToRefresh)))
             {
                 return;
             }
@@ -137,7 +138,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (string.IsNullOrWhiteSpace(homeDirectory) || !Directory.Exists(homeDirectory))
+        if (string.IsNullOrWhiteSpace(homeDirectory) ||
+            !await Task.Run(() => Directory.Exists(homeDirectory)))
         {
             homeDirectory = Directory.GetCurrentDirectory();
         }
@@ -153,13 +155,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             await PersistRootDirectoriesAsync();
         }
 
-        var selectedInitialNode = TrySelectNodeByPath(initialDirectory);
+        var selectedInitialNode = await TrySelectNodeByPathAsync(initialDirectory);
         if (!selectedInitialNode && DirectoryTreeRoots.FirstOrDefault() is { } firstRootNode)
         {
             SelectDirectoryNode(firstRootNode);
         }
 
-        _ = RefreshOtherRootsAsync(initialDirectory);
         await LoadDirectoryAsync(initialDirectory, synchronizeTreeSelection: !selectedInitialNode);
     }
 
@@ -177,7 +178,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private Task GoParentAsync()
     {
-        if (SelectedDirectoryNode?.Parent is { IsPlaceholder: false } parentNode)
+        if (SelectedDirectoryNode?.Parent is { } parentNode)
         {
             SelectDirectoryNode(parentNode);
             return Task.CompletedTask;
@@ -223,12 +224,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         AddDirectoryAsRootCommand.NotifyCanExecuteChanged();
         DeleteDirectoryCommand.NotifyCanExecuteChanged();
 
-        if (_suppressTreeNavigation || value is null || value.IsPlaceholder)
+        if (_suppressTreeNavigation || value is null)
         {
             return;
         }
 
-        _ = EnsureNodeChildrenWithOneLevelPreloadAsync(value);
+        _ = EnsureNodeChildrenAsync(value);
 
         if (PathsEqual(value.FullPath, CurrentDirectory))
         {
@@ -276,7 +277,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task LoadDirectoryAsync(string path, bool synchronizeTreeSelection = true)
     {
-        if (!Directory.Exists(path))
+        if (!await Task.Run(() => Directory.Exists(path)))
         {
             StatusText = $"Directory not found: {path}";
             return;
@@ -302,14 +303,13 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
                 ReplaceImages(imageFiles);
                 SelectedImage = null;
                 CloseViewer();
-
-                if (synchronizeTreeSelection)
-                {
-                    _ = TrySelectNodeByPath(fullPath);
-                }
-
                 StatusText = $"{imageFiles.Count} images";
             });
+
+            if (synchronizeTreeSelection)
+            {
+                await TrySelectNodeByPathAsync(fullPath);
+            }
 
             await PersistCurrentDirectoryAsync(fullPath);
             await LoadThumbnailsAsync(cancellationToken);
@@ -368,7 +368,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
-            _fileSystemService.DeleteFile(target.FullPath);
+            await Task.Run(() => _fileSystemService.DeleteFile(target.FullPath));
 
             if (ReferenceEquals(SelectedImage, target))
             {

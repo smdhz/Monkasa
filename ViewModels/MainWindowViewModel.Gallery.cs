@@ -15,7 +15,7 @@ public partial class MainWindowViewModel
 {
     private async Task RefreshDirectoryIncrementallyAsync(string path)
     {
-        if (!Directory.Exists(path))
+        if (!await Task.Run(() => Directory.Exists(path)))
         {
             StatusText = $"Directory not found: {path}";
             return;

@@ -13,13 +13,11 @@ public sealed partial class DirectoryTreeNodeViewModel : ObservableObject
         string fullPath,
         string displayName,
         DirectoryTreeNodeViewModel? parent,
-        Action<DirectoryTreeNodeViewModel>? expandAction,
-        bool isPlaceholder = false)
+        Action<DirectoryTreeNodeViewModel>? expandAction)
     {
         FullPath = fullPath;
         DisplayName = displayName;
         Parent = parent;
-        IsPlaceholder = isPlaceholder;
         _expandAction = expandAction;
     }
 
@@ -28,10 +26,6 @@ public sealed partial class DirectoryTreeNodeViewModel : ObservableObject
     public string DisplayName { get; }
 
     public DirectoryTreeNodeViewModel? Parent { get; }
-
-    public bool IsPlaceholder { get; }
-
-    public bool IsVisible => !IsPlaceholder;
 
     public ObservableCollection<DirectoryTreeNodeViewModel> Children { get; } = [];
 
@@ -47,14 +41,11 @@ public sealed partial class DirectoryTreeNodeViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(FolderIcon));
 
-        if (value && !IsPlaceholder && !ChildrenLoaded)
+        if (value && !ChildrenLoaded)
         {
             _expandAction?.Invoke(this);
         }
     }
-
-    public static DirectoryTreeNodeViewModel CreatePlaceholder(DirectoryTreeNodeViewModel parent)
-        => new(string.Empty, string.Empty, parent, expandAction: null, isPlaceholder: true);
 
     public static string GetDisplayName(string path)
     {
