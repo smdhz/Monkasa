@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Resources\**" />
+    <Compile Remove="Monkasa.Tests/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>

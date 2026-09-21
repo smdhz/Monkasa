@@ -2,52 +2,79 @@
 
 Monkasa 是一个仿造 Picasa 的轻量看图程序，提供目录树浏览、缩略图网格和全屏查看等基础功能。
 
+## 已有功能
+
+- 从用户主目录开始浏览，支持目录树展开、收起和收藏常用目录。
+- 按名称或修改时间排序图片。
+- 双击进入查看模式，使用 `←` / `→` 切换图片，使用 `Esc` 退出。
+- 支持查看器缩放和拖动。
+- 使用 SQLite 缓存缩略图。
+- 监听当前目录的文件变化，对新增、修改和删除的图片进行增量刷新。
+
+## 发行方式
+
+Monkasa 以包含所需组件的自包含应用包发行，普通用户无需额外安装运行环境。
+
+## 项目结构
+
+- `ViewModels/MainWindowViewModel.cs`：窗口公共状态、初始化和生命周期。
+- `ViewModels/MainWindowViewModel.Directories.cs`：目录树、收藏目录和路径状态。
+- `ViewModels/MainWindowViewModel.Gallery.cs`：图片集合、增量刷新、排序和缩略图加载。
+- `ViewModels/MainWindowViewModel.Viewer.cs`：查看器打开、关闭与导航。
+- `Services/FileSystemService.cs`：目录扫描和文件变化监听。
+- `Services/ThumbnailService.cs`：缩略图和预览图生成。
+- `Services/DbStorageService.cs`：SQLite 缩略图缓存和应用状态。
+- `Services/ImageCatalogPlanner.cs`：可独立测试的图片差异计算与排序逻辑。
+- `Monkasa.Tests`：增量刷新和排序的单元测试。
+
+## 未来方案
+
+以下是当前的改进方向，大致按优先级排列。
+
+### 1. 删除安全
+
+- 默认将图片和文件夹移入系统回收站，不再直接永久删除。
+- 明确区分“移除收藏”和“删除文件夹”。
+- 对递归删除增加更明确的确认信息，并尽可能提供撤销。
+
+### 2. 大目录性能
+
+- 为缩略图网格提供真正的 UI 虚拟化。
+- 优先加载可见区域，滚动后再按需生成其他缩略图。
+- 限制图片解码并发数，并在解码阶段直接采样到目标尺寸，降低大图的内存占用。
+- 对缩略图缓存设置容量上限，并按最近使用时间清理。
+
+### 3. 查看器体验
+
+- 双击切换“适应窗口”与“100% 原始像素”。
+- 以鼠标所在位置为中心缩放，并扩大可用缩放范围。
+- 增加旋转、镜像、分辨率、文件大小和拍摄时间信息。
+- 预加载前后相邻图片，减少方向键切图等待。
+
+### 4. 缩略图网格
+
+- 显示文件名、日期和必要的图片信息。
+- 提供缩略图尺寸调节和不裁剪的显示模式。
+- 改善选中状态，并为损坏或不支持的图片显示占位图。
+
+### 5. 目录与图片管理
+
+- 目录树仅在用户展开时扫描，避免预先访问大量子目录。
+- 增加按文件名快速过滤、递归查看、按年月分组和星标/标签。
+- 根据各平台解码能力评估 HEIC、AVIF 等格式。
+
+### 6. 发布与可维护性
+
+- 为 Windows、macOS 和 Linux 持续产出自包含发行包。
+- 在 CI 中运行构建、单元测试和基本发布验证。
+- 继续为目录、图库和查看器逻辑增加边界情况测试。
+
 ## 声明
 
 - 本程序是为了对 Picasa 贼心不死的朋友们。
 - 代码基本纯通过 AI 生成。
 - 作者比较懒，很多地方没有再手工精修，以能用为原则。
 - 本程序具备强大的跨操作系统能力，至少理论上是这样（Windows / macOS / Linux）。
-
-## 运行前准备
-
-- 普通运行：安装 `.NET 10 Runtime`。
-- 开发构建（`dotnet build` / `dotnet run`）：安装 `.NET 10 SDK`。
-- 安装后可用 `dotnet --info` 确认环境。
-
-Windows（winget）：
-
-```bash
-winget install Microsoft.DotNet.Runtime.10
-```
-
-macOS（Homebrew）：
-
-```bash
-brew install --cask dotnet-runtime
-```
-
-Linux（Ubuntu，APT）：
-
-```bash
-sudo apt-get update
-sudo apt-get install -y dotnet-runtime-10.0
-```
-
-开发者额外安装 SDK：
-
-```bash
-# Windows
-winget install Microsoft.DotNet.SDK.10
-
-# macOS
-brew install --cask dotnet-sdk
-
-# Ubuntu
-sudo apt-get install -y dotnet-sdk-10.0
-```
-
-提示：Ubuntu 上可用版本和仓库配置可能因系统版本而异，请以微软官方文档为准。
 
 ## License
 
