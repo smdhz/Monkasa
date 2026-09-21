@@ -11,13 +11,16 @@ namespace Monkasa.Services;
 public sealed class ThumbnailService
 {
     private readonly DbStorageService _cacheStore;
+    private readonly ISystemThumbnailProvider _systemThumbnailProvider;
     private readonly ILogger<ThumbnailService> _logger;
 
     public ThumbnailService(
         DbStorageService cacheStore,
+        ISystemThumbnailProvider systemThumbnailProvider,
         ILogger<ThumbnailService> logger)
     {
         _cacheStore = cacheStore;
+        _systemThumbnailProvider = systemThumbnailProvider;
         _logger = logger;
     }
 
@@ -50,12 +53,22 @@ public sealed class ThumbnailService
             }
         }
 
-        var generatedBytes = await CreateResizedJpegAsync(
+        var systemResult = await _systemThumbnailProvider.GetThumbnailAsync(
             imageInfo.FullName,
             safeWidth,
             safeHeight,
-            quality: 74,
             cancellationToken);
+
+        var generatedBytes = systemResult.ImageBytes;
+        if (generatedBytes is null && !systemResult.MustNotReadFile)
+        {
+            generatedBytes = await CreateResizedJpegAsync(
+                imageInfo.FullName,
+                safeWidth,
+                safeHeight,
+                quality: 74,
+                cancellationToken);
+        }
 
         if (generatedBytes is null)
         {

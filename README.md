@@ -12,11 +12,23 @@ Monkasa 是一个仿造 Picasa 的轻量看图程序，提供目录树浏览、�
 - 双击进入查看模式，使用 `←` / `→` 切换图片，使用 `Esc` 退出。
 - 支持查看器缩放和拖动。
 - 使用 SQLite 缓存缩略图。
+- 在 macOS 和 Windows 上通过系统缩略图服务读取云盘占位文件预览，避免仅为生成缩略图而下载原文件。
 - 监听当前目录的文件变化，对新增、修改和删除的图片进行增量刷新。
 
 ## 发行方式
 
 Monkasa 以包含所需组件的自包含应用包发行，普通用户无需额外安装运行环境。
+
+发行包按运行平台和 CPU 架构分别生成，不会在 Windows 包中携带 macOS 原生库，反之亦然：
+
+```powershell
+./publish-monkasa.ps1 osx-arm64
+./publish-monkasa.ps1 osx-x64
+./publish-monkasa.ps1 win-x64
+./publish-monkasa.ps1 linux-x64
+```
+
+macOS `.app` 使用 `./package-monkasa-macos.ps1` 打包，它会自动选择当前机器的 `osx-arm64` 或 `osx-x64` RID。
 
 ## 项目结构
 

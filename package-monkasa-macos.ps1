@@ -6,7 +6,9 @@ $ProjectDir = $pwd.Path
 $OutputDir = $ProjectDir
 $ProjectFile = Join-Path $ProjectDir 'Monkasa.csproj'
 $TargetFramework = 'net10.0'
-$PublishDir = Join-Path $ProjectDir "bin/Release/$TargetFramework/publish"
+$MachineArchitecture = (& uname -m).Trim()
+$RuntimeIdentifier = if ($MachineArchitecture -eq 'arm64') { 'osx-arm64' } else { 'osx-x64' }
+$PublishDir = Join-Path $ProjectDir "bin/Release/$TargetFramework/$RuntimeIdentifier/publish"
 $AppBundle = Join-Path $PublishDir "$AppName.app"
 $ContentsDir = Join-Path $AppBundle 'Contents'
 $MacOSDir = Join-Path $ContentsDir 'MacOS'
@@ -43,7 +45,7 @@ try {
     }
 
     Write-Host '==> Publishing Monkasa'
-    & dotnet publish $ProjectFile -c Release
+    & dotnet publish $ProjectFile -c Release -r $RuntimeIdentifier --self-contained true
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
 
     Write-Host '==> Rebuilding app bundle'

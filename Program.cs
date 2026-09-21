@@ -67,6 +67,18 @@ sealed class Program
                 services.AddSingleton<AppLogService>();
                 services.AddSingleton<FileSystemService>();
                 services.AddSingleton<DbStorageService>();
+                if (OperatingSystem.IsMacOS())
+                {
+                    services.AddSingleton<ISystemThumbnailProvider, MacSystemThumbnailProvider>();
+                }
+                else if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+                {
+                    services.AddSingleton<ISystemThumbnailProvider, WindowsSystemThumbnailProvider>();
+                }
+                else
+                {
+                    services.AddSingleton<ISystemThumbnailProvider, NullSystemThumbnailProvider>();
+                }
                 services.AddSingleton<ThumbnailService>();
                 services.AddSingleton<MainWindowViewModel>();
                 services.AddSingleton<MainWindow>();
