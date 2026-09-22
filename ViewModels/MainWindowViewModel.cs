@@ -19,6 +19,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private const string LastOpenedDirectoryStateKey = "last_opened_directory";
     private const string RootDirectoriesStateKey = "root_directories";
+    private const string SortModeStateKey = "sort_mode";
     private const int ThumbnailWidth = 320;
     private const int ThumbnailHeight = 220;
 
@@ -32,6 +33,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         : StringComparison.Ordinal;
     private CancellationTokenSource? _directoryLoadCts;
     private CancellationTokenSource? _viewerLoadCts;
+    private Task _sortModePersistenceTask = Task.CompletedTask;
     private readonly Func<Task> _directoryRefreshCallbackAsync;
     private bool _initialized;
     private bool _suppressTreeNavigation;
@@ -137,6 +139,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             _logger.LogWarning(ex, "Unable to ensure local cache schema at startup");
         }
 
+        CurrentSortMode = await GetInitialSortModeAsync();
+
         var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrWhiteSpace(homeDirectory) ||
             !await Task.Run(() => Directory.Exists(homeDirectory)))
@@ -213,6 +217,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         CurrentSortMode = nextMode;
         ApplySortToImageItems();
         StatusText = $"Sorted by {CurrentSortText}";
+        _sortModePersistenceTask = PersistSortModeAsync(_sortModePersistenceTask, nextMode);
     }
 
     partial void OnSelectedDirectoryNodeChanged(DirectoryTreeNodeViewModel? value)

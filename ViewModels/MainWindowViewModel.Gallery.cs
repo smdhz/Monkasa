@@ -13,6 +13,44 @@ namespace Monkasa.ViewModels;
 
 public partial class MainWindowViewModel
 {
+    private async Task<ImageSortMode> GetInitialSortModeAsync()
+    {
+        try
+        {
+            var savedSortMode = await _cacheStore.TryGetStateValueAsync(
+                SortModeStateKey,
+                CancellationToken.None);
+
+            if (Enum.TryParse<ImageSortMode>(savedSortMode, ignoreCase: true, out var sortMode) &&
+                Enum.IsDefined(sortMode))
+            {
+                return sortMode;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to load saved sort mode");
+        }
+
+        return ImageSortMode.Name;
+    }
+
+    private async Task PersistSortModeAsync(Task previousSave, ImageSortMode sortMode)
+    {
+        try
+        {
+            await previousSave;
+            await _cacheStore.SaveStateValueAsync(
+                SortModeStateKey,
+                sortMode.ToString(),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to persist sort mode {SortMode}", sortMode);
+        }
+    }
+
     private async Task RefreshDirectoryIncrementallyAsync(string path)
     {
         if (!await Task.Run(() => Directory.Exists(path)))
