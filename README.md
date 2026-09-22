@@ -17,18 +17,7 @@ Monkasa 是一个仿造 Picasa 的轻量看图程序，提供目录树浏览、�
 
 ## 发行方式
 
-Monkasa 以包含所需组件的自包含应用包发行，普通用户无需额外安装运行环境。
-
-发行包按运行平台和 CPU 架构分别生成，不会在 Windows 包中携带 macOS 原生库，反之亦然：
-
-```powershell
-./publish-monkasa.ps1 osx-arm64
-./publish-monkasa.ps1 osx-x64
-./publish-monkasa.ps1 win-x64
-./publish-monkasa.ps1 linux-x64
-```
-
-macOS `.app` 使用 `./package-monkasa-macos.ps1` 打包，它会自动选择当前机器的 `osx-arm64` 或 `osx-x64` RID。
+macOS `.app` 使用 `./package-monkasa-macos.ps1` 打包。
 
 ## 项目结构
 
@@ -79,7 +68,7 @@ macOS `.app` 使用 `./package-monkasa-macos.ps1` 打包，它会自动选择当
 
 ### 6. 发布与可维护性
 
-- 为 Windows、macOS 和 Linux 持续产出自包含发行包。
+- 为 Windows、macOS 和 Linux 持续产出发行包。
 - 在 CI 中运行构建、单元测试和基本发布验证。
 - 继续为目录、图库和查看器逻辑增加边界情况测试。
 
