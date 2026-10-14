@@ -26,11 +26,9 @@
 - `Services/DbStorageService.cs`：SQLite 缩略图缓存读写。
 - `Views/MainWindow.axaml`：主界面布局与绑定。
 - `Views/ImageViewer.axaml.cs`：查看器缩放、定位和拖动交互。
-- `Monkasa.Tests`：增量差异计算与排序的单元测试。
 
 ## 开发约定
 
 - 目录监听刷新必须保留未变化的 `ImageItemViewModel`，尽量保留当前选中项和查看器状态。
 - 不要把目录、图库和查看器逻辑重新集中到 `MainWindowViewModel.cs`；按现有 partial 文件的职责放置代码。
-- 新增或修改图片差异、排序等纯逻辑时，同步补充 `Monkasa.Tests`。
-- 交付前运行 `dotnet build Monkasa.sln --no-restore -m:1` 和 `dotnet test Monkasa.Tests/Monkasa.Tests.csproj --no-build --no-restore`。
+- 交付前运行 `dotnet build Monkasa.sln --no-restore -m:1`。

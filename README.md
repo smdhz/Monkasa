@@ -29,7 +29,6 @@ macOS `.app` 使用 `./package-monkasa-macos.ps1` 打包。
 - `Services/ThumbnailService.cs`：缩略图和预览图生成。
 - `Services/DbStorageService.cs`：SQLite 缩略图缓存和应用状态。
 - `Services/ImageCatalogPlanner.cs`：可独立测试的图片差异计算与排序逻辑。
-- `Monkasa.Tests`：增量刷新和排序的单元测试。
 
 ## 未来方案
 

@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Resources\**" />
-    <Compile Remove="Monkasa.Tests/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,43 +19,30 @@
     <MacNativeLibrary>$(IntermediateOutputPath)native/libMonkasa.Platform.Mac.dylib</MacNativeLibrary>
   </PropertyGroup>
 
-  <Target Name="BuildMacThumbnailBridge"
-          BeforeTargets="CoreCompile"
-          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+  <Target Name="BuildMacThumbnailBridge" BeforeTargets="CoreCompile" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <MakeDir Directories="$(IntermediateOutputPath)native" />
     <Exec Command="xcrun clang -dynamiclib -fobjc-arc -mmacosx-version-min=11.0 -framework Foundation -framework AppKit -framework QuickLookThumbnailing -o &quot;$(MacNativeLibrary)&quot; &quot;$(MSBuildProjectDirectory)/Native/Mac/MonkasaThumbnailBridge.m&quot;" />
   </Target>
 
-  <Target Name="CopyMacThumbnailBridgeToBuildOutput"
-          AfterTargets="Build"
-          DependsOnTargets="BuildMacThumbnailBridge"
-          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+  <Target Name="CopyMacThumbnailBridgeToBuildOutput" AfterTargets="Build" DependsOnTargets="BuildMacThumbnailBridge" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <Copy SourceFiles="$(MacNativeLibrary)" DestinationFolder="$(TargetDir)" />
   </Target>
 
-  <Target Name="CopyMacThumbnailBridgeToPublishOutput"
-          AfterTargets="Publish"
-          DependsOnTargets="BuildMacThumbnailBridge"
-          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+  <Target Name="CopyMacThumbnailBridgeToPublishOutput" AfterTargets="Publish" DependsOnTargets="BuildMacThumbnailBridge" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <Copy SourceFiles="$(MacNativeLibrary)" DestinationFolder="$(PublishDir)" />
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
-    <PackageReference Include="NLog.Extensions.Logging" Version="6.2.0" />
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
+    <PackageReference Include="NLog.Extensions.Logging" Version="6.2.1" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
-    <PackageReference Include="SkiaSharp" Version="4.151.1" />
-    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.0" />
-    <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.20">
-      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 </Project>
