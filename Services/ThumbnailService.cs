@@ -204,7 +204,9 @@ public sealed class ThumbnailService
             return null;
         }
 
-        using var source = SKBitmap.Decode(codec);
+        using var source = resizeToFit
+            ? DecodeDownsampled(codec, targetWidth, targetHeight)
+            : SKBitmap.Decode(codec);
         if (source is null)
         {
             return null;
@@ -218,6 +220,52 @@ public sealed class ThumbnailService
         return data?.ToArray();
     }
 
+    private static SKBitmap? DecodeDownsampled(SKCodec codec, int targetWidth, int targetHeight)
+    {
+        var info = codec.Info;
+
+        // Target box in encoded (pre-rotation) coordinates.
+        var swapsAxes = SwapsAxes(codec.EncodedOrigin);
+        var boxWidth = swapsAxes ? targetHeight : targetWidth;
+        var boxHeight = swapsAxes ? targetWidth : targetHeight;
+        var fitScale = Math.Min((float)boxWidth / info.Width, (float)boxHeight / info.Height);
+        var neededWidth = (int)Math.Ceiling(info.Width * fitScale);
+        var neededHeight = (int)Math.Ceiling(info.Height * fitScale);
+
+        // JPEG and WebP can scale while decoding. Pick the smallest supported size that still
+        // covers the thumbnail, so a large photo never has to be decoded at full resolution.
+        foreach (var denominator in new[] { 8, 4, 2 })
+        {
+            var scaled = codec.GetScaledDimensions(1f / denominator);
+            if (scaled.Width >= info.Width || scaled.Width < neededWidth || scaled.Height < neededHeight)
+            {
+                continue;
+            }
+
+            var decodeInfo = info.WithSize(scaled.Width, scaled.Height);
+            if (decodeInfo.AlphaType == SKAlphaType.Unpremul)
+            {
+                decodeInfo = decodeInfo.WithAlphaType(SKAlphaType.Premul);
+            }
+
+            var bitmap = SKBitmap.Decode(codec, decodeInfo);
+            if (bitmap is not null)
+            {
+                return bitmap;
+            }
+
+            break;
+        }
+
+        return SKBitmap.Decode(codec);
+    }
+
+    private static bool SwapsAxes(SKEncodedOrigin origin)
+        => origin is SKEncodedOrigin.LeftTop
+            or SKEncodedOrigin.RightTop
+            or SKEncodedOrigin.RightBottom
+            or SKEncodedOrigin.LeftBottom;
+
     private static SKBitmap DrawOrientedBitmap(
         SKBitmap source,
         SKEncodedOrigin origin,
@@ -225,10 +273,7 @@ public sealed class ThumbnailService
         int targetHeight,
         bool resizeToFit)
     {
-        var swapsAxes = origin is SKEncodedOrigin.LeftTop
-            or SKEncodedOrigin.RightTop
-            or SKEncodedOrigin.RightBottom
-            or SKEncodedOrigin.LeftBottom;
+        var swapsAxes = SwapsAxes(origin);
         var orientedWidth = swapsAxes ? source.Height : source.Width;
         var orientedHeight = swapsAxes ? source.Width : source.Height;
 

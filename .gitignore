@@ -483,3 +483,6 @@ $RECYCLE.BIN/
 *.swp
 
 .codex
+
+# Built by Monkasa.csproj from Native/Mac/*.m
+Native/*.dylib
